@@ -1,0 +1,11 @@
+[
+  {
+    "cwd": "/Volumes/BAK3T/projects/skills/auto-run",
+    "endpoint": "http://127.0.0.1:64250",
+    "kind": "interactive",
+    "lastHeartbeat": 1794122910351,
+    "pid": 72069,
+    "sessionId": "1434eb87-3aff-48ae-b320-d940f02f3ff6",
+    "version": "2.165.0"
+  }
+]

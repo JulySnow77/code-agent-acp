@@ -1,0 +1,28 @@
+{
+  "status": "valid",
+  "protocolVersion": 1,
+  "endpoint": "http://127.0.0.1:64250",
+  "sessionId": "1434eb87-3aff-48ae-b320-d940f02f3ff6",
+  "agentCapabilities": {
+    "promptCapabilities": {
+      "image": true,
+      "embeddedContext": true
+    },
+    "mcpCapabilities": {
+      "http": true,
+      "sse": true
+    },
+    "loadSession": true,
+    "delegateToolsSupport": true,
+    "mainAgentSupport": false,
+    "multitaskSupport": true,
+    "metaPromptSupport": true
+  },
+  "promptSent": false,
+  "authMethods": [
+    "iOA",
+    "external",
+    "internal",
+    "selfhosted"
+  ]
+}

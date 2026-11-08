@@ -1,0 +1,21 @@
+{
+  "schema_version": 1,
+  "bundle": "/Volumes/BAK3T/projects/skills/auto-run/julysnow-flow",
+  "bundle_commit": "302e0da066d766e7bf09043ce2c5da80cb3de042",
+  "workbuddy_bridge": "/Volumes/BAK3T/projects/acp/workbuddy/bin/workbuddy-acp-bridge",
+  "workbuddy_bridge_marker": "workbuddy-acp-bridge",
+  "models": {
+    "default": {},
+    "spec": {
+      "agent": "workbuddy",
+      "model": "<providerId>/<modelId>"
+    },
+    "plan": "workbuddy/<providerId>/<modelId>",
+    "dev": {
+      "agent": "workbuddy",
+      "model": "<providerId>/<modelId>"
+    }
+  },
+  "gate_policy": "agent_review",
+  "timeout_seconds": 1800
+}

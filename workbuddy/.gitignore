@@ -1,0 +1,13 @@
+# Compiled artifacts (build with `make build`)
+bin/workbuddy-acp-bridge
+bin/fake-acp-server
+
+# Go build/test output
+*.test
+*.out
+coverage.txt
+
+# Editor / OS noise
+.DS_Store
+.idea/
+.vscode/

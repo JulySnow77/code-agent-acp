@@ -1,0 +1,70 @@
+{
+  "generated": "2026-11-08",
+  "environment": {
+    "os": "macOS",
+    "go": "go1.26.1",
+    "kimi_cli": "2.1.1",
+    "agent_command": "kimi acp",
+    "protocol_version": 1
+  },
+  "evidence": [
+    {
+      "file": "kimi-acp-handshake-raw-20261108.json",
+      "source": "Python raw stdio probe",
+      "content": "initialize response (capabilities, authMethods, agentInfo) and session/new -> -32000 Authentication required",
+      "prompt_sent": false
+    },
+    {
+      "file": "kimi-acp-methods-raw-20261108.json",
+      "source": "Python raw stdio probe",
+      "content": "initialize, session/list (titles redacted), session/bogus -> -32601, authenticate with unknown methodId -> -32602, agent-side session/request_permission -> -32601",
+      "prompt_sent": false
+    },
+    {
+      "file": "doctor-go-20261108.json",
+      "source": "bin/kimi-acp doctor (Go client)",
+      "content": "read-only initialize + session/list against real kimi acp; status=valid, protocolVersion=1, titles redacted",
+      "prompt_sent": false
+    },
+    {
+      "file": "doctor-check-auth-20261108.json",
+      "source": "bin/kimi-acp doctor --check-auth (Go client)",
+      "content": "session/new attempted once; returned -32000 Authentication required, so no session was created",
+      "prompt_sent": false
+    },
+    {
+      "file": "doctor-trace-20261108.ndjson",
+      "source": "bin/kimi-acp doctor --trace",
+      "content": "initialize request/response only; session/list frames removed because they contain user session titles",
+      "prompt_sent": false
+    },
+    {
+      "file": "bridge-go-trace-20261108.ndjson",
+      "source": "bin/kimi-acp bridge --trace, driven by a raw ACP client",
+      "content": "initialize forwarded to real kimi acp and returned verbatim; unknown method forwarded and returned -32601",
+      "prompt_sent": false
+    },
+    {
+      "file": "serve-go-trace-20261108.ndjson",
+      "source": "bin/kimi-acp serve --trace, driven by a raw ACP client",
+      "content": "Go echo agent: initialize, session/new, streamed session/update, tool_call, reverse permission, session/prompt end_turn, session/load replay, unknown method",
+      "prompt_sent": true,
+      "note": "prompt was sent to the local deterministic Go echo agent, not to Kimi"
+    }
+  ],
+  "findings": [
+    "ACP v1, JSON-RPC 2.0 over newline-delimited stdio; stderr is for logs only",
+    "Kimi advertises loadSession, promptCapabilities.image/embeddedContext, mcpCapabilities.http/sse, sessionCapabilities list/resume/close/delete/fork/additionalDirectories, auth.logout",
+    "authMethods[].env is an object, not the EnvVariable[] declared in schema/v1; this implementation keeps it as raw JSON",
+    "session/new requires an authenticated CLI and returns -32000 Authentication required otherwise",
+    "session/list works without authentication",
+    "unknown methods return -32601 with data.method; invalid auth methodId returns -32602",
+    "session/request_permission is an Agent->Client method; calling it as Client->Agent returns -32601"
+  ],
+  "boundaries": [
+    "No session/prompt was sent to a real Kimi session; model output, tool execution and Kimi-side permission handling are unverified",
+    "No login / device-code flow was triggered; the CLI remains unauthenticated",
+    "Session titles in evidence are redacted; raw session/list lines were removed from the doctor trace",
+    "Simulated tests, the Go echo agent and read-only handshakes do not claim real Kimi compatibility"
+  ]
+}

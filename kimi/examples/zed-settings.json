@@ -1,0 +1,22 @@
+{
+  "agent_servers": {
+    "Kimi Code CLI": {
+      "type": "custom",
+      "command": "kimi",
+      "args": ["acp"],
+      "env": {}
+    },
+    "kimi-acp-go echo agent": {
+      "type": "custom",
+      "command": "/ABS/PATH/TO/kimi-acp/bin/kimi-acp",
+      "args": ["serve"],
+      "env": {}
+    },
+    "kimi-acp-go bridge to Kimi": {
+      "type": "custom",
+      "command": "/ABS/PATH/TO/kimi-acp/bin/kimi-acp",
+      "args": ["bridge"],
+      "env": {}
+    }
+  }
+}

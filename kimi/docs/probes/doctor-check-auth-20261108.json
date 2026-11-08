@@ -1,0 +1,86 @@
+{
+  "tool": "kimi-acp doctor",
+  "version": "0.1.0",
+  "command": "kimi",
+  "args": [
+    "acp"
+  ],
+  "cwd": "/Volumes/BAK3T/projects/acp/kimi",
+  "status": "valid",
+  "promptSent": false,
+  "protocolVersion": 1,
+  "agentInfo": {
+    "name": "Kimi Code CLI",
+    "version": "2.1.1"
+  },
+  "agentCapabilities": {
+    "loadSession": true,
+    "promptCapabilities": {
+      "image": true,
+      "embeddedContext": true
+    },
+    "mcpCapabilities": {
+      "http": true,
+      "sse": true
+    },
+    "sessionCapabilities": {
+      "additionalDirectories": {},
+      "close": {},
+      "delete": {},
+      "fork": {},
+      "list": {},
+      "resume": {}
+    },
+    "auth": {
+      "logout": {}
+    }
+  },
+  "authMethods": [
+    {
+      "id": "login",
+      "type": "terminal",
+      "name": "Login with Kimi account",
+      "description": "Open the device-code login flow in a terminal.",
+      "args": [
+        "--login"
+      ],
+      "env": {},
+      "_meta": {
+        "terminal-auth": {
+          "args": [
+            "login"
+          ],
+          "command": "kimi",
+          "env": {},
+          "label": "Login with Kimi account",
+          "type": "terminal"
+        }
+      }
+    }
+  ],
+  "sessionList": [
+    {
+      "sessionId": "session_c3ee36d2-4523-488e-98bd-713922a0ae56",
+      "cwd": "/Volumes/BAK3T/projects/tool/leon-Newdesignv1.7",
+      "title": "[redacted]",
+      "updatedAt": "2026-08-27T07:56:01.203Z"
+    },
+    {
+      "sessionId": "session_29fb0127-8a91-4b94-bb76-0374b90b4ab7",
+      "cwd": "/Volumes/BAK3T/projects/skills/julysnow-flow",
+      "title": "[redacted]",
+      "updatedAt": "2026-08-27T07:52:22.754Z"
+    }
+  ],
+  "sessionListCalled": true,
+  "authCheck": {
+    "called": true,
+    "error": {
+      "code": -32000,
+      "message": "Authentication required"
+    }
+  },
+  "stderrTail": [
+    "{\"level\":\"info\",\"msg\":\"acp: auth readiness probe failed, trying the OAuth summary\",\"error\":\"provider managed:kimi-code has no credential configured\"}"
+  ]
+}

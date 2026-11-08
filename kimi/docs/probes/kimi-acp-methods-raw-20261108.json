@@ -1,0 +1,176 @@
+{
+  "probe": "read-only error/behavior probe",
+  "prompt_sent": false,
+  "sent": [
+    {
+      "jsonrpc": "2.0",
+      "id": 1,
+      "method": "initialize",
+      "params": {
+        "protocolVersion": 1,
+        "clientCapabilities": {
+          "fs": {
+            "readTextFile": true,
+            "writeTextFile": true
+          },
+          "terminal": true
+        },
+        "clientInfo": {
+          "name": "kimi-acp-go-probe",
+          "version": "0.1.0"
+        }
+      }
+    },
+    {
+      "jsonrpc": "2.0",
+      "id": 2,
+      "method": "session/list",
+      "params": {}
+    },
+    {
+      "jsonrpc": "2.0",
+      "id": 3,
+      "method": "session/bogus",
+      "params": {}
+    },
+    {
+      "jsonrpc": "2.0",
+      "id": 4,
+      "method": "authenticate",
+      "params": {
+        "methodId": "__probe_invalid__"
+      }
+    },
+    {
+      "jsonrpc": "2.0",
+      "id": 5,
+      "method": "session/request_permission",
+      "params": {
+        "sessionId": "x",
+        "toolCall": {
+          "toolCallId": "y"
+        },
+        "options": []
+      }
+    }
+  ],
+  "stdout_raw_lines": [
+    "[redacted: raw lines may contain session titles]"
+  ],
+  "stdout_parsed": [
+    {
+      "jsonrpc": "2.0",
+      "id": 1,
+      "result": {
+        "protocolVersion": 1,
+        "agentCapabilities": {
+          "loadSession": true,
+          "promptCapabilities": {
+            "image": true,
+            "audio": false,
+            "embeddedContext": true
+          },
+          "sessionCapabilities": {
+            "list": {},
+            "resume": {},
+            "close": {},
+            "delete": {},
+            "fork": {},
+            "additionalDirectories": {}
+          },
+          "mcpCapabilities": {
+            "http": true,
+            "sse": true
+          },
+          "auth": {
+            "logout": {}
+          }
+        },
+        "authMethods": [
+          {
+            "id": "login",
+            "type": "terminal",
+            "name": "Login with Kimi account",
+            "description": "Open the device-code login flow in a terminal.",
+            "args": [
+              "--login"
+            ],
+            "env": {},
+            "_meta": {
+              "terminal-auth": {
+                "type": "terminal",
+                "label": "Login with Kimi account",
+                "command": "kimi",
+                "args": [
+                  "login"
+                ],
+                "env": {}
+              }
+            }
+          }
+        ],
+        "agentInfo": {
+          "name": "Kimi Code CLI",
+          "version": "2.1.1"
+        }
+      }
+    },
+    {
+      "jsonrpc": "2.0",
+      "id": 2,
+      "result": {
+        "sessions": [
+          {
+            "sessionId": "session_c3ee36d2-4523-488e-98bd-713922a0ae56",
+            "cwd": "/Volumes/BAK3T/projects/tool/leon-Newdesignv1.7",
+            "title": "[redacted]",
+            "updatedAt": "2026-08-27T07:56:01.203Z"
+          },
+          {
+            "sessionId": "session_29fb0127-8a91-4b94-bb76-0374b90b4ab7",
+            "cwd": "/Volumes/BAK3T/projects/skills/julysnow-flow",
+            "title": "[redacted]",
+            "updatedAt": "2026-08-27T07:52:22.754Z"
+          }
+        ],
+        "nextCursor": null
+      }
+    },
+    {
+      "jsonrpc": "2.0",
+      "id": 3,
+      "error": {
+        "code": -32601,
+        "message": "\"Method not found\": session/bogus",
+        "data": {
+          "method": "session/bogus"
+        }
+      }
+    },
+    {
+      "jsonrpc": "2.0",
+      "id": 4,
+      "error": {
+        "code": -32602,
+        "message": "Invalid params: Unknown auth method: __probe_invalid__",
+        "data": {
+          "methodId": "__probe_invalid__"
+        }
+      }
+    },
+    {
+      "jsonrpc": "2.0",
+      "id": 5,
+      "error": {
+        "code": -32601,
+        "message": "\"Method not found\": session/request_permission",
+        "data": {
+          "method": "session/request_permission"
+        }
+      }
+    }
+  ],
+  "stderr_tail": [],
+  "exit_code": 0,
+  "note": "Session titles redacted; read-only probe, no session/prompt sent."
+}

@@ -1,0 +1,25 @@
+{
+  "probe": "mcode-cli-surface",
+  "date": "2026-11-08",
+  "readOnly": true,
+  "note": "CLI surface only. No ACP frame was sent in these two invocations.",
+  "version": {
+    "argv": [
+      "mcode",
+      "--version"
+    ],
+    "exitCode": 0,
+    "stdout": "0.6.3",
+    "stderr": ""
+  },
+  "acpHelp": {
+    "argv": [
+      "mcode",
+      "acp",
+      "--help"
+    ],
+    "exitCode": 0,
+    "stdout": "Usage: mcode acp [options] [command]\n\nRun MiniMax Code as an Agent Client Protocol server over stdio\n\nOptions:\n  --system-prompt <text>              replace the main Agent identity prompt\n                                      for this process\n  --system-prompt-file <path>         read the replacement main Agent identity\n                                      prompt from a file\n  --append-system-prompt <text>       append text after the main Agent identity\n                                      prompt for this process\n  --append-system-prompt-file <path>  read the appended main Agent prompt text\n                                      from a file\n  -h, --help                          display help for command\n\nCommands:\n  login [options]                     Sign in to use MiniMax Code Agent\n                                      features",
+    "stderr": ""
+  }
+}

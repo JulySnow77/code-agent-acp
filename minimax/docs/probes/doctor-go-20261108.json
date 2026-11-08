@@ -1,0 +1,44 @@
+{
+  "tool": "minimax-acp doctor",
+  "version": "0.1.0",
+  "command": "mcode",
+  "args": [
+    "acp"
+  ],
+  "cwd": "/Volumes/BAK3T/projects/acp/minimax",
+  "status": "no_response",
+  "promptSent": false,
+  "sessionCreated": false,
+  "handshakeTimeoutMs": 20000,
+  "cli": {
+    "command": "mcode",
+    "resolvedPath": "/Users/alan.ma/.local/bin/mcode",
+    "cliVersion": "0.6.3",
+    "acpServerHelp": true,
+    "dataDir": "/Users/alan.ma/.minimax",
+    "dataDirExists": true,
+    "authDirExists": true,
+    "loginHint": "`mcode login`（Global 账号用 `mcode login --region global`）",
+    "warnings": [
+      "NODE_OPTIONS 注入了 --require shim；在本机实测中 `mcode acp` 因此无任何 stdio 响应",
+      "PATH 含 safe-delete / brokered shim；CLI 清理锁文件时可能被拦截并退出",
+      "HTTPS_PROXY 已设置（CLI 会读取该代理；localhost 仍绕过）"
+    ]
+  },
+  "protocolVersion": 0,
+  "agentCapabilities": {},
+  "authMethods": null,
+  "sessionListCalled": false,
+  "authCheck": {
+    "called": false
+  },
+  "stderrTail": [],
+  "diagnostics": [
+    "在握手超时内未收到 initialize 响应；mcode acp 可能未进入协议循环",
+    "请在普通终端（非 IDE 沙箱）里重试，并核对 cli.warnings",
+    "NODE_OPTIONS 注入了 --require shim；在本机实测中 `mcode acp` 因此无任何 stdio 响应",
+    "PATH 含 safe-delete / brokered shim；CLI 清理锁文件时可能被拦截并退出",
+    "HTTPS_PROXY 已设置（CLI 会读取该代理；localhost 仍绕过）"
+  ],
+  "error": "context deadline exceeded"
+}

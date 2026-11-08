@@ -1,0 +1,81 @@
+{
+  "probe": "mcode-acp-initialize-no-response",
+  "date": "2026-11-08",
+  "readOnly": true,
+  "promptSent": false,
+  "sessionCreated": false,
+  "request": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "initialize",
+    "params": {
+      "protocolVersion": 1,
+      "clientCapabilities": {
+        "fs": {
+          "readTextFile": true,
+          "writeTextFile": true
+        },
+        "terminal": true
+      },
+      "clientInfo": {
+        "name": "minimax-acp-go-probe",
+        "title": "minimax-acp Go probe",
+        "version": "0.1.0"
+      }
+    }
+  },
+  "observation": {
+    "elapsedSeconds": 46.3,
+    "processStillAliveAtTimeout": true,
+    "stdoutFrames": [],
+    "stderrLines": [],
+    "timeline": [
+      {
+        "t": 10,
+        "poll": null
+      },
+      {
+        "t": 20,
+        "poll": null
+      },
+      {
+        "t": 30,
+        "poll": null
+      },
+      {
+        "t": 40,
+        "poll": null
+      }
+    ],
+    "termination": "killed after timeout (SIGKILL)"
+  },
+  "configurationsTried": [
+    {
+      "name": "default WorkBuddy PATH",
+      "result": "exit 1 after 15.7s; stderr: safe-delete broker denied delete of ~/.minimax.lock"
+    },
+    {
+      "name": "clean PATH (no brokered-bin / safe-bin)",
+      "result": "no stdout/stderr for 40s, process alive"
+    },
+    {
+      "name": "clean PATH + HTTP(S)_PROXY=127.0.0.1:7890",
+      "result": "no response within 18s"
+    },
+    {
+      "name": "clean PATH + isolated MINIMAX_DATA_DIR",
+      "result": "no response within 18s"
+    },
+    {
+      "name": "clean PATH + NODE_OPTIONS shim removed + proxy",
+      "result": "no response within 25s"
+    }
+  ],
+  "environmentFindings": [
+    "NODE_OPTIONS injects a --require node shim into every node process",
+    "PATH contains WorkBuddy brokered-bin and safe-bin shims",
+    "HTTPS_PROXY is available at 127.0.0.1:7890",
+    "lsof showed the node process alive with pipes/kqueues but no established socket"
+  ],
+  "conclusion": "The native ACP command exists (`mcode acp --help` succeeds), but `mcode acp` never emitted an initialize response inside this desktop sandbox. The cause is not established. This is an environment blocker, NOT evidence of an ACP incompatibility and NOT evidence of compatibility either."
+}

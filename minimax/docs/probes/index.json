@@ -1,0 +1,51 @@
+{
+  "date": "2026-11-08",
+  "host": "macOS / WorkBuddy desktop sandbox",
+  "cli": {
+    "package": "@minimax-ai/code",
+    "command": "mcode acp",
+    "version": "0.6.3",
+    "resolvedPath": "/Users/alan.ma/.local/bin/mcode"
+  },
+  "evidence": [
+    {
+      "file": "cli-surface-20261108.json",
+      "source": "mcode --version / mcode acp --help",
+      "content": "CLI 版本 0.6.3；acp 子命令明确声明为 Agent Client Protocol stdio server，含 login 子命令"
+    },
+    {
+      "file": "doctor-go-20261108.json",
+      "source": "bin/minimax-acp doctor --json --handshake-timeout 20s",
+      "content": "Go doctor 只读报告：status=no_response、promptSent=false、sessionCreated=false、acpServerHelp=true、cliVersion=0.6.3，附环境诊断"
+    },
+    {
+      "file": "doctor-trace-20261108.ndjson",
+      "source": "bin/minimax-acp doctor --trace",
+      "content": "线材证据：只有一条发出的 initialize 帧，没有收到任何响应帧"
+    },
+    {
+      "file": "initialize-no-response-20261108.json",
+      "source": "raw stdio probes (Python, read-only)",
+      "content": "46 秒时间线无任何 stdout/stderr 帧；列出 5 种环境配置尝试与环境变量发现"
+    }
+  ],
+  "verified": [
+    "mcode --version 返回 0.6.3",
+    "mcode acp --help 列出原生 ACP stdio server 与 login 子命令",
+    "Go doctor 能检测 CLI、登录数据目录（仅目录名）与桌面沙箱环境干扰，并能把无响应 agent 明确报为 no_response",
+    "Go 协议层 / client / agent / bridge / CLI 的单元测试与真实子进程往返测试全部通过（上游为 Go echo fixture，不触碰真实 mcode）"
+  ],
+  "notVerified": [
+    "真实 agentCapabilities、authMethods、模型目录与 configOptions（未收到 initialize 响应）",
+    "session/prompt 的流式输出、tool_call、diff、权限确认与取消在真实 MiniMax 上的行为",
+    "MiniMax 账号登录态在 ACP 会话中是否可用",
+    "原生 ACP 与 Zed / JetBrains 的实际界面联动"
+  ],
+  "boundary": [
+    "所有真实环境探针均为只读：未发送 session/prompt，未调用 session/new，未创建会话，未改动用户文件",
+    "证据不含任何凭证内容；doctor 只 stat 目录名，不读取 auth.json / config.yaml / sessions/*",
+    "serve 返回的 modes / configOptions 全部带 fixture 前缀，是确定性夹具，不代表 MiniMax 真实模型或权限模式",
+    "模拟测试、Go echo agent 和只读握手都不冒充真实 MiniMax 兼容",
+    "no_response 是环境阻塞，既不是不兼容的证据，也不是兼容的证据；需在普通终端（非 IDE 沙箱）复跑 doctor 后更新本目录"
+  ]
+}

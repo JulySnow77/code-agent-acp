@@ -1,0 +1,10 @@
+{
+  "agent_servers": {
+    "minimax-code": {
+      "type": "custom",
+      "command": "mcode",
+      "args": ["acp"],
+      "env": {}
+    }
+  }
+}

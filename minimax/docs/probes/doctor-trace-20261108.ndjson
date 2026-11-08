@@ -1,0 +1,1 @@
+{"time":"2026-11-08T09:49:19.270066Z","side":"doctor","dir":"out","frame":{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":1,"clientCapabilities":{},"clientInfo":{"name":"minimax-acp-go-doctor","title":"minimax-acp Go doctor","version":"0.1.0"}}}}

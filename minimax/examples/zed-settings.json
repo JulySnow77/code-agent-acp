@@ -1,0 +1,24 @@
+{
+  "agent_servers": {
+    "MiniMax Code (native ACP)": {
+      "type": "custom",
+      "command": "/Users/alan.ma/.local/bin/mcode",
+      "args": ["acp"],
+      "env": {}
+    },
+    "minimax-acp (Go bridge)": {
+      "type": "custom",
+      "command": "/Volumes/BAK3T/projects/acp/minimax/bin/minimax-acp",
+      "args": ["bridge"],
+      "env": {
+        "MINIMAX_ACP_CLI": "/Users/alan.ma/.local/bin/mcode"
+      }
+    },
+    "minimax-acp (Go echo fixture)": {
+      "type": "custom",
+      "command": "/Volumes/BAK3T/projects/acp/minimax/bin/minimax-acp",
+      "args": ["serve"],
+      "env": {}
+    }
+  }
+}

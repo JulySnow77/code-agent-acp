@@ -1,0 +1,868 @@
+{
+  "messages": [],
+  "projection": {
+    "activeToolCalls": [],
+    "backgroundJobs": [],
+    "contextUsed": 0,
+    "contextWindow": 200000,
+    "mode": "build",
+    "pendingPermissions": [],
+    "sessionId": "unknown",
+    "status": "idle",
+    "target": null,
+    "totalTokenCount": 0,
+    "turnCount": 0
+  },
+  "protocol": {
+    "name": "ZCode Protocol",
+    "version": 1
+  },
+  "runtime": {
+    "eventSeq": 0,
+    "goalVerificationTimeline": [],
+    "goalVerifications": [],
+    "pendingRequestIds": [],
+    "stateRevision": 0
+  },
+  "session": {
+    "createdAt": 1789735458723,
+    "mode": "build",
+    "model": {
+      "modelId": "claude-opus-4-8",
+      "providerId": "fd529cb0-df58-4ca1-a11d-816bb6c08494"
+    },
+    "sessionId": "sess_5cafacbc-0d01-4968-b572-51a81cd63c88",
+    "sessionKind": "interactive",
+    "status": "idle",
+    "target": null,
+    "title": "",
+    "traceId": "23634268-c51e-442e-a52a-066674e82be7",
+    "updatedAt": 1789735458723,
+    "workspace": {
+      "workspaceKey": "/Volumes/BAK3T/projects/kanban/zcode-open-bridge-go",
+      "workspacePath": "/Volumes/BAK3T/projects/kanban/zcode-open-bridge-go"
+    }
+  },
+  "settings": {
+    "mode": {
+      "current": "yolo"
+    },
+    "model": {
+      "available": [
+        {
+          "contextWindow": 1000000,
+          "label": "claude-opus-4-8",
+          "maxOutputTokens": 32000,
+          "properties": {
+            "inputFormat": {
+              "supportsAudio": false,
+              "supportsImage": false,
+              "supportsPdf": false,
+              "supportsText": true,
+              "supportsVideo": false
+            },
+            "outputFormat": {
+              "supportsText": true
+            }
+          },
+          "providerLabel": "c-sub2api",
+          "reasoning": {
+            "defaultLevel": "enabled",
+            "levels": [
+              {
+                "label": "disabled",
+                "value": "disabled"
+              },
+              {
+                "label": "enabled",
+                "value": "enabled"
+              }
+            ]
+          },
+          "ref": {
+            "modelId": "claude-opus-4-8",
+            "providerId": "fd529cb0-df58-4ca1-a11d-816bb6c08494"
+          }
+        },
+        {
+          "contextWindow": 1000000,
+          "label": "stealth/ox-alpha",
+          "maxOutputTokens": 128000,
+          "properties": {
+            "inputFormat": {
+              "supportsAudio": false,
+              "supportsImage": false,
+              "supportsPdf": false,
+              "supportsText": true,
+              "supportsVideo": false
+            },
+            "outputFormat": {
+              "supportsText": true
+            }
+          },
+          "providerLabel": "c-sub2api",
+          "reasoning": {
+            "defaultLevel": "max",
+            "levels": [
+              {
+                "label": "low",
+                "value": "low"
+              },
+              {
+                "label": "high",
+                "value": "high"
+              },
+              {
+                "label": "max",
+                "value": "max"
+              }
+            ]
+          },
+          "ref": {
+            "modelId": "stealth/ox-alpha",
+            "providerId": "fd529cb0-df58-4ca1-a11d-816bb6c08494"
+          }
+        },
+        {
+          "contextWindow": 1000000,
+          "label": "MiniMax-M3",
+          "maxOutputTokens": 32000,
+          "properties": {
+            "inputFormat": {
+              "supportsAudio": false,
+              "supportsImage": true,
+              "supportsPdf": false,
+              "supportsText": true,
+              "supportsVideo": true
+            },
+            "outputFormat": {
+              "supportsText": true
+            }
+          },
+          "providerLabel": "minimaxi",
+          "reasoning": {
+            "defaultLevel": "enabled",
+            "levels": [
+              {
+                "label": "disabled",
+                "value": "disabled"
+              },
+              {
+                "label": "enabled",
+                "value": "enabled"
+              }
+            ]
+          },
+          "ref": {
+            "modelId": "MiniMax-M3",
+            "providerId": "1c22b1a1-cf20-4eff-afdc-297fd1e69e6a"
+          }
+        },
+        {
+          "contextWindow": 200000,
+          "label": "gpt-5.5",
+          "maxOutputTokens": 32000,
+          "properties": {
+            "inputFormat": {
+              "supportsAudio": false,
+              "supportsImage": false,
+              "supportsPdf": false,
+              "supportsText": true,
+              "supportsVideo": false
+            },
+            "outputFormat": {
+              "supportsText": true
+            }
+          },
+          "providerLabel": "c-anyrouter",
+          "reasoning": {
+            "defaultLevel": "enabled",
+            "levels": [
+              {
+                "label": "disabled",
+                "value": "disabled"
+              },
+              {
+                "label": "enabled",
+                "value": "enabled"
+              }
+            ]
+          },
+          "ref": {
+            "modelId": "gpt-5.5",
+            "providerId": "38acd6a5-1169-47bf-ba3a-34d5bd8071b7"
+          }
+        },
+        {
+          "contextWindow": 200000,
+          "label": "gpt-5.5",
+          "maxOutputTokens": 32000,
+          "properties": {
+            "inputFormat": {
+              "supportsAudio": false,
+              "supportsImage": false,
+              "supportsPdf": false,
+              "supportsText": true,
+              "supportsVideo": false
+            },
+            "outputFormat": {
+              "supportsText": true
+            }
+          },
+          "providerLabel": "o-sub2pai",
+          "reasoning": {
+            "defaultLevel": "enabled",
+            "levels": [
+              {
+                "label": "disabled",
+                "value": "disabled"
+              },
+              {
+                "label": "enabled",
+                "value": "enabled"
+              }
+            ]
+          },
+          "ref": {
+            "modelId": "gpt-5.5",
+            "providerId": "a45187b5-dbbc-4342-a6c6-a8c9d42c9304"
+          }
+        },
+        {
+          "contextWindow": 200000,
+          "label": "gpt-5.6-sol",
+          "maxOutputTokens": 128000,
+          "properties": {
+            "inputFormat": {
+              "supportsAudio": false,
+              "supportsImage": true,
+              "supportsPdf": true,
+              "supportsText": true,
+              "supportsVideo": false
+            },
+            "outputFormat": {
+              "supportsText": true
+            }
+          },
+          "providerLabel": "o-sub2pai",
+          "reasoning": {
+            "defaultLevel": "max",
+            "levels": [
+              {
+                "label": "none",
+                "value": "none"
+              },
+              {
+                "label": "low",
+                "value": "low"
+              },
+              {
+                "label": "medium",
+                "value": "medium"
+              },
+              {
+                "label": "high",
+                "value": "high"
+              },
+              {
+                "label": "xhigh",
+                "value": "xhigh"
+              },
+              {
+                "label": "max",
+                "value": "max"
+              }
+            ]
+          },
+          "ref": {
+            "modelId": "gpt-5.6-sol",
+            "providerId": "a45187b5-dbbc-4342-a6c6-a8c9d42c9304"
+          }
+        },
+        {
+          "contextWindow": 1000000,
+          "label": "glm-5.2",
+          "maxOutputTokens": 128000,
+          "properties": {
+            "inputFormat": {
+              "supportsAudio": false,
+              "supportsImage": false,
+              "supportsPdf": false,
+              "supportsText": true,
+              "supportsVideo": false
+            },
+            "outputFormat": {
+              "supportsText": true
+            }
+          },
+          "providerLabel": "o-sub2pai",
+          "reasoning": {
+            "defaultLevel": "max",
+            "levels": [
+              {
+                "label": "disabled",
+                "value": "disabled"
+              },
+              {
+                "label": "high",
+                "value": "high"
+              },
+              {
+                "label": "max",
+                "value": "max"
+              }
+            ]
+          },
+          "ref": {
+            "modelId": "glm-5.2",
+            "providerId": "a45187b5-dbbc-4342-a6c6-a8c9d42c9304"
+          }
+        },
+        {
+          "contextWindow": 1000000,
+          "label": "deepseek-v4-flash",
+          "maxOutputTokens": 384000,
+          "properties": {
+            "inputFormat": {
+              "supportsAudio": false,
+              "supportsImage": false,
+              "supportsPdf": false,
+              "supportsText": true,
+              "supportsVideo": false
+            },
+            "outputFormat": {
+              "supportsText": true
+            }
+          },
+          "providerLabel": "o-sub2pai",
+          "reasoning": {
+            "defaultLevel": "max",
+            "levels": [
+              {
+                "label": "disabled",
+                "value": "disabled"
+              },
+              {
+                "label": "low",
+                "value": "low"
+              },
+              {
+                "label": "high",
+                "value": "high"
+              },
+              {
+                "label": "max",
+                "value": "max"
+              }
+            ]
+          },
+          "ref": {
+            "modelId": "deepseek-v4-flash",
+            "providerId": "a45187b5-dbbc-4342-a6c6-a8c9d42c9304"
+          }
+        },
+        {
+          "contextWindow": 1000000,
+          "label": "grok-4.5",
+          "maxOutputTokens": 32000,
+          "properties": {
+            "inputFormat": {
+              "supportsAudio": false,
+              "supportsImage": false,
+              "supportsPdf": false,
+              "supportsText": true,
+              "supportsVideo": false
+            },
+            "outputFormat": {
+              "supportsText": true
+            }
+          },
+          "providerLabel": "o-sub2pai",
+          "reasoning": {
+            "defaultLevel": "enabled",
+            "levels": [
+              {
+                "label": "disabled",
+                "value": "disabled"
+              },
+              {
+                "label": "enabled",
+                "value": "enabled"
+              }
+            ]
+          },
+          "ref": {
+            "modelId": "grok-4.5",
+            "providerId": "a45187b5-dbbc-4342-a6c6-a8c9d42c9304"
+          }
+        },
+        {
+          "contextWindow": 1000000,
+          "label": "kimi-k3",
+          "maxOutputTokens": 131072,
+          "properties": {
+            "inputFormat": {
+              "supportsAudio": false,
+              "supportsImage": true,
+              "supportsPdf": false,
+              "supportsText": true,
+              "supportsVideo": true
+            },
+            "outputFormat": {
+              "supportsText": true
+            }
+          },
+          "providerLabel": "o-sub2pai",
+          "reasoning": {
+            "defaultLevel": "max",
+            "levels": [
+              {
+                "label": "low",
+                "value": "low"
+              },
+              {
+                "label": "high",
+                "value": "high"
+              },
+              {
+                "label": "max",
+                "value": "max"
+              }
+            ]
+          },
+          "ref": {
+            "modelId": "kimi-k3",
+            "providerId": "a45187b5-dbbc-4342-a6c6-a8c9d42c9304"
+          }
+        },
+        {
+          "contextWindow": 1000000,
+          "label": "stealth/ox-alpha",
+          "maxOutputTokens": 128000,
+          "properties": {
+            "inputFormat": {
+              "supportsAudio": false,
+              "supportsImage": false,
+              "supportsPdf": false,
+              "supportsText": true,
+              "supportsVideo": false
+            },
+            "outputFormat": {
+              "supportsText": true
+            }
+          },
+          "providerLabel": "o-sub2pai",
+          "reasoning": {
+            "defaultLevel": "max",
+            "levels": [
+              {
+                "label": "low",
+                "value": "low"
+              },
+              {
+                "label": "high",
+                "value": "high"
+              },
+              {
+                "label": "max",
+                "value": "max"
+              }
+            ]
+          },
+          "ref": {
+            "modelId": "stealth/ox-alpha",
+            "providerId": "a45187b5-dbbc-4342-a6c6-a8c9d42c9304"
+          }
+        },
+        {
+          "contextWindow": 1000000,
+          "label": "deepseek-v4-pro",
+          "maxOutputTokens": 384000,
+          "properties": {
+            "inputFormat": {
+              "supportsAudio": false,
+              "supportsImage": false,
+              "supportsPdf": false,
+              "supportsText": true,
+              "supportsVideo": false
+            },
+            "outputFormat": {
+              "supportsText": true
+            }
+          },
+          "providerLabel": "o-sub2pai",
+          "reasoning": {
+            "defaultLevel": "max",
+            "levels": [
+              {
+                "label": "disabled",
+                "value": "disabled"
+              },
+              {
+                "label": "low",
+                "value": "low"
+              },
+              {
+                "label": "high",
+                "value": "high"
+              },
+              {
+                "label": "max",
+                "value": "max"
+              }
+            ]
+          },
+          "ref": {
+            "modelId": "deepseek-v4-pro",
+            "providerId": "a45187b5-dbbc-4342-a6c6-a8c9d42c9304"
+          }
+        },
+        {
+          "contextWindow": 1000000,
+          "label": "gpt-6-astra",
+          "maxOutputTokens": 128000,
+          "properties": {
+            "inputFormat": {
+              "supportsAudio": false,
+              "supportsImage": true,
+              "supportsPdf": true,
+              "supportsText": true,
+              "supportsVideo": false
+            },
+            "outputFormat": {
+              "supportsText": true
+            }
+          },
+          "providerLabel": "o-sub2pai",
+          "reasoning": {
+            "defaultLevel": "max",
+            "levels": [
+              {
+                "label": "low",
+                "value": "low"
+              },
+              {
+                "label": "medium",
+                "value": "medium"
+              },
+              {
+                "label": "high",
+                "value": "high"
+              },
+              {
+                "label": "xhigh",
+                "value": "xhigh"
+              },
+              {
+                "label": "max",
+                "value": "max"
+              }
+            ]
+          },
+          "ref": {
+            "modelId": "gpt-6-astra",
+            "providerId": "a45187b5-dbbc-4342-a6c6-a8c9d42c9304"
+          }
+        },
+        {
+          "contextWindow": 1000000,
+          "label": "deepseek-v4-flash",
+          "maxOutputTokens": 384000,
+          "properties": {
+            "inputFormat": {
+              "supportsAudio": false,
+              "supportsImage": true,
+              "supportsPdf": false,
+              "supportsText": true,
+              "supportsVideo": false
+            },
+            "outputFormat": {
+              "supportsText": true
+            }
+          },
+          "providerLabel": "deepseek",
+          "reasoning": {
+            "defaultLevel": "max",
+            "levels": [
+              {
+                "label": "disabled",
+                "value": "disabled"
+              },
+              {
+                "label": "low",
+                "value": "low"
+              },
+              {
+                "label": "high",
+                "value": "high"
+              },
+              {
+                "label": "max",
+                "value": "max"
+              }
+            ]
+          },
+          "ref": {
+            "modelId": "deepseek-v4-flash",
+            "providerId": "5b2aa118-c922-48ee-8492-86df0a21db36"
+          }
+        },
+        {
+          "contextWindow": 1000000,
+          "label": "deepseek-v4-pro",
+          "maxOutputTokens": 384000,
+          "properties": {
+            "inputFormat": {
+              "supportsAudio": false,
+              "supportsImage": false,
+              "supportsPdf": false,
+              "supportsText": true,
+              "supportsVideo": false
+            },
+            "outputFormat": {
+              "supportsText": true
+            }
+          },
+          "providerLabel": "deepseek",
+          "reasoning": {
+            "defaultLevel": "max",
+            "levels": [
+              {
+                "label": "disabled",
+                "value": "disabled"
+              },
+              {
+                "label": "low",
+                "value": "low"
+              },
+              {
+                "label": "high",
+                "value": "high"
+              },
+              {
+                "label": "max",
+                "value": "max"
+              }
+            ]
+          },
+          "ref": {
+            "modelId": "deepseek-v4-pro",
+            "providerId": "5b2aa118-c922-48ee-8492-86df0a21db36"
+          }
+        },
+        {
+          "contextWindow": 262144,
+          "label": "stealth/union-alpha",
+          "maxOutputTokens": 32000,
+          "properties": {
+            "inputFormat": {
+              "supportsAudio": false,
+              "supportsImage": false,
+              "supportsPdf": false,
+              "supportsText": true,
+              "supportsVideo": false
+            },
+            "outputFormat": {
+              "supportsText": true
+            }
+          },
+          "providerLabel": "c-openroute",
+          "reasoning": {
+            "defaultLevel": "enabled",
+            "levels": [
+              {
+                "label": "disabled",
+                "value": "disabled"
+              },
+              {
+                "label": "enabled",
+                "value": "enabled"
+              }
+            ]
+          },
+          "ref": {
+            "modelId": "stealth/union-alpha",
+            "providerId": "7d091664-67f4-477c-ac37-9a54361a21b3"
+          }
+        },
+        {
+          "contextWindow": 200000,
+          "label": "k3-256k",
+          "maxOutputTokens": 131072,
+          "properties": {
+            "inputFormat": {
+              "supportsAudio": false,
+              "supportsImage": true,
+              "supportsPdf": false,
+              "supportsText": true,
+              "supportsVideo": false
+            },
+            "outputFormat": {
+              "supportsText": true
+            }
+          },
+          "providerLabel": "kimi",
+          "reasoning": {
+            "defaultLevel": "max",
+            "levels": [
+              {
+                "label": "low",
+                "value": "low"
+              },
+              {
+                "label": "high",
+                "value": "high"
+              },
+              {
+                "label": "max",
+                "value": "max"
+              }
+            ]
+          },
+          "ref": {
+            "modelId": "k3-256k",
+            "providerId": "8d1fa249-5953-463d-93c8-c81eecd93049"
+          }
+        },
+        {
+          "contextWindow": 1000000,
+          "label": "kimi-for-code",
+          "maxOutputTokens": 32000,
+          "properties": {
+            "inputFormat": {
+              "supportsAudio": false,
+              "supportsImage": false,
+              "supportsPdf": false,
+              "supportsText": true,
+              "supportsVideo": false
+            },
+            "outputFormat": {
+              "supportsText": true
+            }
+          },
+          "providerLabel": "kimi",
+          "reasoning": {
+            "defaultLevel": "enabled",
+            "levels": [
+              {
+                "label": "disabled",
+                "value": "disabled"
+              },
+              {
+                "label": "enabled",
+                "value": "enabled"
+              }
+            ]
+          },
+          "ref": {
+            "modelId": "kimi-for-code",
+            "providerId": "8d1fa249-5953-463d-93c8-c81eecd93049"
+          }
+        },
+        {
+          "contextWindow": 1000000,
+          "label": "gpt-6-astra",
+          "maxOutputTokens": 128000,
+          "properties": {
+            "inputFormat": {
+              "supportsAudio": false,
+              "supportsImage": true,
+              "supportsPdf": true,
+              "supportsText": true,
+              "supportsVideo": false
+            },
+            "outputFormat": {
+              "supportsText": true
+            }
+          },
+          "providerLabel": "o-agentr",
+          "reasoning": {
+            "defaultLevel": "max",
+            "levels": [
+              {
+                "label": "low",
+                "value": "low"
+              },
+              {
+                "label": "medium",
+                "value": "medium"
+              },
+              {
+                "label": "high",
+                "value": "high"
+              },
+              {
+                "label": "xhigh",
+                "value": "xhigh"
+              },
+              {
+                "label": "max",
+                "value": "max"
+              }
+            ]
+          },
+          "ref": {
+            "modelId": "gpt-6-astra",
+            "providerId": "fc93d4f8-835c-4568-9aae-a31690f124a1"
+          }
+        }
+      ],
+      "current": {
+        "modelId": "claude-opus-4-8",
+        "options": {
+          "reasoningLevel": "enabled"
+        },
+        "providerId": "fd529cb0-df58-4ca1-a11d-816bb6c08494"
+      },
+      "lastUsed": {
+        "modelId": "claude-opus-4-8",
+        "providerId": "fd529cb0-df58-4ca1-a11d-816bb6c08494"
+      }
+    },
+    "permission": {
+      "mode": "yolo"
+    },
+    "thoughtLevel": {
+      "available": [
+        {
+          "label": "disabled",
+          "value": "disabled"
+        },
+        {
+          "label": "enabled",
+          "value": "enabled"
+        }
+      ],
+      "current": "enabled",
+      "enabled": true
+    }
+  },
+  "slashCommands": [
+    {
+      "description": "Show or set the current session goal.",
+      "inputHint": "/goal [pause|resume|clear|replace \u003cobjective\u003e|\u003cobjective\u003e]",
+      "name": "goal",
+      "source": "builtin"
+    },
+    {
+      "description": "Compact the current conversation with optional instructions.",
+      "inputHint": "/compact [instructions]",
+      "name": "compact",
+      "source": "builtin"
+    },
+    {
+      "description": "Create or update workspace AGENTS.md instructions.",
+      "inputHint": "/init [notes]",
+      "name": "init",
+      "source": "builtin"
+    },
+    {
+      "description": "Switch to Plan mode and optionally send a task.",
+      "inputHint": "/plan [task]",
+      "name": "plan",
+      "source": "builtin"
+    }
+  ],
+  "todoGroups": [],
+  "todos": []
+}

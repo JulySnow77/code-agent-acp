@@ -1,0 +1,11 @@
+{
+  "id": "10000001",
+  "method": "session/create",
+  "params": {
+    "mode": "yolo",
+    "workspace": {
+      "workspaceKey": "/Volumes/BAK3T/projects/kanban/zcode-open-bridge-go",
+      "workspacePath": "/Volumes/BAK3T/projects/kanban/zcode-open-bridge-go"
+    }
+  }
+}

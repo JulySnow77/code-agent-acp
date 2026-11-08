@@ -1,0 +1,464 @@
+#!/usr/bin/env python3
+"""Fake ``zcode app-server`` for end-to-end bridge tests.
+
+Speaks just enough of the zcode app-server JSON-RPC protocol (newline-
+delimited over stdio) to drive the real ``zcode-acp-bridge`` binary
+through an ``AskUserQuestion`` round-trip without a licensed ZCode CLI.
+
+Why this exists
+---------------
+``zcode-acp-bridge`` spawns ``$ZCODE_BIN app-server --stdio`` and talks
+to it over stdio. The bridge's unit tests swap in an in-process
+``FakeBackend`` (no subprocess), which is great for bridge-internal
+logic but cannot exercise:
+
+* the bridge's ``ZCodeBackend._reader_loop`` routing of
+  ``interaction/requestUserInput``;
+* the full stdio framing between bridge and a real zcode process;
+* the bridge's reply (``accept`` + ``answers``) round-tripping back to
+  zcode.
+
+This fake is the smallest zcode app-server that lets an omnigent-side
+``AcpExecutor`` drive the real bridge end-to-end and observe the
+``AskUserQuestion`` round-trip the way a real ZCode CLI would.
+
+Invocation
+----------
+The bridge invokes it as ``$ZCODE_BIN app-server --stdio``. This script
+ignores ``app-server`` / ``--stdio`` (they only select stdio mode, which
+is the only mode implemented here). Point ``ZCODE_BIN`` at this file
+(must be executable):
+
+    ZCODE_BIN=/path/to/tests/fakes/zcode_app_server zcode-acp-bridge
+
+Protocol surface
+----------------
+- ``session/create``    → returns a fresh ``sessionId``
+- ``session/subscribe`` → returns a snapshot + ``eventSeq``
+- ``session/read``      → returns a ``projection`` (status idle/running)
+- ``session/send``      → starts a scripted turn. The turn's shape is
+  selected by the prompt text:
+
+  * contains ``ASK_USER_QUESTION_TWICE`` → push ``turn.started``, then
+    TWO sequential ``interaction/requestUserInput`` rounds in the one
+    turn (distinct rpcIds): after the first reply arrives, ask a second
+    question, then ``turn.completed``. Mirrors the production regression
+    "the question list displays again" — the model re-asks after a
+    cancelled/lost answer.
+  * contains ``ASK_USER_QUESTION_MULTI`` → one
+    ``interaction/requestUserInput`` carrying TWO questions (the second
+    ``multiSelect: true``), block until the client replies, then
+    ``turn.completed``.
+  * contains ``ASK_USER_QUESTION`` → push ``turn.started``, then send a
+    server-initiated ``interaction/requestUserInput`` (with a single
+    question), block until the client replies, then push
+    ``turn.completed`` and return the prompt result.
+  * otherwise → push ``turn.started`` + a ``model.streaming`` text
+    delta + ``turn.completed`` and return.
+
+All other methods return ``method not found`` so a protocol drift
+surfaces loudly instead of hanging the bridge.
+
+Answer delivery assertion
+-------------------------
+The fake only emits ``turn.completed`` for an AskUserQuestion turn
+*after* it received the bridge's reply to each
+``interaction/requestUserInput``. So if the bridge fails to deliver the
+user's answer (the regression symptom), the turn hangs until the
+``ANSWER_TIMEOUT_S`` deadline and the fake emits ``turn.failed``
+instead — the test asserts on ``stopReason`` to tell the two apart.
+With ``FAKE_ZCODE_STATE_FILE`` set, the literal reply payloads are also
+written to that file (single round: the reply dict; multi round:
+``{"replies": [...]}``) so tests assert the exact accept/cancel
+payload zcode received.
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import sys
+import threading
+import time
+from typing import Any
+
+# How long to wait for the bridge's reply before declaring the turn
+# failed. Generous so a slow CI still passes; a broken bridge fails
+# much faster via the test's own timeout on the prompt response.
+ANSWER_TIMEOUT_S = 30.0
+
+# Lock around stdout — both the request handler thread and the
+# server-initiated request thread write to stdout, and interleaved
+# JSON-RPC frames would corrupt the bridge's readline parser.
+_STDOUT_LOCK = threading.Lock()
+
+# Server-initiated request id space. Must not collide with the client's
+# integer ids (the bridge uses 10_000_000+); a string prefix keeps them
+# disjoint just like the real app-server's ids do.
+_NEXT_REQ_ID = [9000]
+_REQ_ID_LOCK = threading.Lock()
+
+# In-memory session state. One fake process serves one bridge, so a
+# module-global dict is enough — no persistence needed.
+_SESSIONS: dict[str, dict[str, Any]] = {}
+
+
+def _send(msg: dict[str, Any]) -> None:
+    line = json.dumps(msg, ensure_ascii=False) + "\n"
+    with _STDOUT_LOCK:
+        sys.stdout.write(line)
+        sys.stdout.flush()
+
+
+def _response(msg_id: int | str | None, result: dict[str, Any]) -> None:
+    _send({"jsonrpc": "2.0", "id": msg_id, "result": result})
+
+
+def _error(msg_id: int | str | None, code: int, message: str) -> None:
+    _send({"jsonrpc": "2.0", "id": msg_id, "error": {"code": code, "message": message}})
+
+
+def _next_req_id() -> str:
+    with _REQ_ID_LOCK:
+        _NEXT_REQ_ID[0] += 1
+        return f"req_{_NEXT_REQ_ID[0]}"
+
+
+def _session_event(session_id: str, seq: int, event_type: str, payload: dict[str, Any]) -> None:
+    """Push a ``session/event`` notification to the bridge's reader."""
+    _send(
+        {
+            "jsonrpc": "2.0",
+            "method": "session/event",
+            "params": {
+                "sessionId": session_id,
+                "seq": seq,
+                "type": event_type,
+                "payload": payload,
+            },
+        }
+    )
+
+
+def _omit_session_id() -> bool:
+    """Test hook: FAKE_ZCODE_OMIT_SESSION_ID simulates a real CLI that emits
+    interaction/requestUserInput WITHOUT a top-level sessionId (or with one
+    that doesn't match the session/create id). The bridge's _reader_loop
+    routes by params.sessionId — a missing/mismatched id must not silently
+    cancel the question (the regression symptom: question re-displays, web
+    submit 404s).
+    """
+    return bool(os.environ.get("FAKE_ZCODE_OMIT_SESSION_ID"))
+
+
+def _ask_and_wait(session_id: str, state: dict[str, Any], questions: list[dict[str, Any]]) -> dict[str, Any] | None:
+    """Send one ``interaction/requestUserInput`` and block for the bridge's reply.
+
+    Returns the reply message (``accept`` + ``content.answers`` or
+    ``cancel``), or ``None`` on timeout so a broken bridge fails the test
+    instead of hanging it forever. The reply is appended to
+    ``state["replies"]`` so a test can assert the literal payload zcode
+    received — stronger than inferring delivery from stopReason alone.
+    """
+    req_id = _next_req_id()
+    reply_holder: dict[str, Any] = {"reply": None}
+    reply_event = threading.Event()
+    state["pending_input"] = {"req_id": req_id, "holder": reply_holder, "event": reply_event}
+
+    n = len(state.get("replies") or [])
+    if _omit_session_id():
+        request_params: dict[str, Any] = {
+            "requestId": f"req-{n + 1}",
+            "toolCallId": f"tc-ask-{n + 1}",
+            "toolName": "AskUserQuestion",
+        }
+    else:
+        request_params = {
+            "sessionId": session_id,
+            "requestId": f"req-{n + 1}",
+            "toolCallId": f"tc-ask-{n + 1}",
+            "toolName": "AskUserQuestion",
+        }
+    request_params["questions"] = questions
+
+    _send(
+        {
+            "jsonrpc": "2.0",
+            "id": req_id,
+            "method": "interaction/requestUserInput",
+            "params": request_params,
+        }
+    )
+
+    answered = reply_event.wait(timeout=ANSWER_TIMEOUT_S)
+    state["pending_input"] = None
+    if not answered:
+        state.setdefault("replies", []).append({"error": "timeout waiting for bridge reply"})
+        return None
+    reply = reply_holder["reply"]
+    state.setdefault("replies", []).append(reply)
+    return reply
+
+
+def _persist_replies(state: dict[str, Any]) -> None:
+    """Persist the bridge's replies so a test can assert the literal payload.
+
+    Opt-in via FAKE_ZCODE_STATE_FILE. Single-round turns write the one reply
+    dict directly (back-compat with the original tests); multi-round turns
+    write ``{"replies": [...]}``.
+    """
+    state_path = os.environ.get("FAKE_ZCODE_STATE_FILE")
+    if not state_path:
+        return
+    replies = state.get("replies") or []
+    payload: Any = replies[0] if len(replies) == 1 else {"replies": replies}
+    try:
+        with open(state_path, "w", encoding="utf-8") as f:
+            json.dump(payload, f, ensure_ascii=False)
+    except OSError:
+        pass
+
+
+def _finish_turn(session_id: str, state: dict[str, Any], ok: bool) -> None:
+    seq = state["seq"] + 1
+    state["seq"] = seq
+    if ok:
+        _session_event(
+            session_id,
+            seq,
+            "turn.completed",
+            {"resultType": "success", "usage": {"totalTokens": 12}},
+        )
+    else:
+        _session_event(
+            session_id,
+            seq,
+            "turn.failed",
+            {"resultType": "error_request_timeout"},
+        )
+
+
+_FRAMEWORK_QUESTION = {
+    "question": "Which framework should we use?",
+    "header": "Framework",
+    "options": [
+        {"label": "React", "value": "React"},
+        {"label": "Vue", "value": "Vue"},
+    ],
+    "multiSelect": False,
+}
+
+_PLATFORMS_QUESTION = {
+    "question": "Which platforms must be supported?",
+    "header": "Platforms",
+    "options": [
+        {"label": "iOS", "value": "iOS"},
+        {"label": "Android", "value": "Android"},
+        {"label": "Web", "value": "Web"},
+    ],
+    "multiSelect": True,
+}
+
+_THEME_QUESTION = {
+    "question": "Pick a color theme?",
+    "header": "Theme",
+    "options": [
+        {"label": "Light", "value": "Light"},
+        {"label": "Dark", "value": "Dark"},
+    ],
+    "multiSelect": False,
+}
+
+
+def _start_turn(session_id: str, state: dict[str, Any], prompt: str) -> None:
+    seq = state["seq"] + 1
+    state["seq"] = seq
+    _session_event(session_id, seq, "turn.started", {"prompt": prompt})
+
+
+def _run_question_turn(session_id: str, msg_id: int | str | None) -> None:
+    """Single-question turn: requestUserInput → await reply → turn.completed.
+
+    The reply the client sends back (``accept`` + ``content.answers``) is
+    captured into ``state[\"replies\"]`` so a test can assert the answer
+    reached zcode — the regression symptom was "the answer never reaches
+    the zcode agent".
+
+    Runs in a background thread: real zcode acknowledges ``session/send``
+    synchronously and streams turn events asynchronously, so the turn
+    body must not block the ``session/send`` response (the bridge's
+    event-driven loop consumes these events and synthesizes the prompt
+    response itself when it sees ``turn.completed``).
+    """
+    state = _SESSIONS.setdefault(session_id, {"seq": 0, "replies": []})
+    _start_turn(session_id, state, "ask_user_question")
+    reply = _ask_and_wait(session_id, state, [_FRAMEWORK_QUESTION])
+    if reply is None:
+        _finish_turn(session_id, state, ok=False)
+        return
+    _persist_replies(state)
+    _finish_turn(session_id, state, ok=True)
+
+
+def _run_multi_question_turn(session_id: str, msg_id: int | str | None) -> None:
+    """One requestUserInput carrying TWO questions (q2 multiSelect).
+
+    Mirrors the real zcode AskUserQuestion batch: the model can ask up to
+    several questions in a single tool call. The bridge must fan them out
+    as sequential ``session/request_permission`` prompts and deliver ALL
+    answers in ONE ``accept`` reply keyed by each question's text.
+    """
+    state = _SESSIONS.setdefault(session_id, {"seq": 0, "replies": []})
+    _start_turn(session_id, state, "ask_user_question_multi")
+    reply = _ask_and_wait(
+        session_id, state, [_FRAMEWORK_QUESTION, _PLATFORMS_QUESTION]
+    )
+    if reply is None:
+        _finish_turn(session_id, state, ok=False)
+        return
+    _persist_replies(state)
+    _finish_turn(session_id, state, ok=True)
+
+
+def _run_twice_question_turn(session_id: str, msg_id: int | str | None) -> None:
+    """TWO sequential requestUserInput rounds inside ONE turn.
+
+    This is the production regression shape "the question list
+displays again": after the first request was answered (or cancelled),
+    the model re-asks before the turn ends. Each round is a distinct
+    server-initiated request with its own rpcId; the bridge must surface
+    BOTH as separate ``session/request_permission`` (fresh ids) and reply
+    to each rpcId separately. Both replies are persisted so a test can
+    assert round 1 got its reply AND round 2 got its own.
+    """
+    state = _SESSIONS.setdefault(session_id, {"seq": 0, "replies": []})
+    _start_turn(session_id, state, "ask_user_question_twice")
+    reply1 = _ask_and_wait(session_id, state, [_FRAMEWORK_QUESTION])
+    if reply1 is None:
+        _finish_turn(session_id, state, ok=False)
+        return
+    reply2 = _ask_and_wait(session_id, state, [_THEME_QUESTION])
+    if reply2 is None:
+        _finish_turn(session_id, state, ok=False)
+        return
+    _persist_replies(state)
+    _finish_turn(session_id, state, ok=True)
+
+
+def _run_text_turn(session_id: str, msg_id: int | str | None, prompt: str) -> None:
+    """A plain text turn: turn.started + a streaming text delta + turn.completed.
+
+    Background-thread sibling of :func:`_run_question_turn` — pushes the
+    scripted event sequence asynchronously after ``session/send`` was
+    acknowledged synchronously.
+    """
+    state = _SESSIONS.setdefault(session_id, {"seq": 0, "last_answer": None})
+    seq = state["seq"] + 1
+    state["seq"] = seq
+    _session_event(session_id, seq, "turn.started", {"prompt": prompt})
+    seq = state["seq"] + 1
+    state["seq"] = seq
+    _session_event(
+        session_id,
+        seq,
+        "model.streaming",
+        {"kind": "text_delta", "text": "hello from fake zcode"},
+    )
+    seq = state["seq"] + 1
+    state["seq"] = seq
+    _session_event(
+        session_id,
+        seq,
+        "turn.completed",
+        {"resultType": "success", "usage": {"totalTokens": 8}},
+    )
+
+
+def _dispatch(msg: dict[str, Any]) -> None:
+    msg_id = msg.get("id")
+    method = msg.get("method")
+    params = msg.get("params") or {}
+
+    # A reply to our server-initiated interaction/requestUserInput.
+    # Detect by: has an id, no method, and matches a pending input req_id.
+    if msg_id is not None and method is None:
+        for state in _SESSIONS.values():
+            pending = state.get("pending_input")
+            if pending and pending["req_id"] == msg_id:
+                pending["holder"]["reply"] = msg
+                pending["event"].set()
+                state["pending_input"] = None
+                return
+        # Stale reply with no matching request — best-effort ignore.
+        return
+
+    if method == "session/create":
+        sid = f"fake-zc-sess-{int(time.time() * 1000)}-{os.getpid()}"
+        _SESSIONS[sid] = {"seq": 0, "last_answer": None}
+        _response(msg_id, {"session": {"sessionId": sid}})
+        return
+
+    if method == "session/subscribe":
+        # Snapshot present → bridge takes the event-driven path.
+        _response(msg_id, {"eventSeq": 0, "snapshot": {"status": "idle", "messages": []}})
+        return
+
+    if method == "session/read":
+        sid = params.get("sessionId") or ""
+        status = "running" if _SESSIONS.get(sid, {}).get("pending_input") else "idle"
+        _response(msg_id, {"projection": {"status": status, "messages": []}})
+        return
+
+    if method == "session/send":
+        sid = params.get("sessionId") or ""
+        content = params.get("content") or ""
+        if isinstance(content, list):
+            text = " ".join(b.get("text", "") for b in content if isinstance(b, dict))
+        else:
+            text = str(content)
+        # Real zcode acknowledges session/send immediately and streams
+        # turn events asynchronously. If we blocked here (waiting until
+        # the turn finished before responding), the bridge's synchronous
+        # backend.request("session/send") would never return and the
+        # event-driven turn loop would never start — the turn would hang.
+        _response(msg_id, {"accepted": True})
+        # Marker dispatch order matters: the MULTI/TWICE markers contain
+        # the plain ASK_USER_QUESTION substring, so they must be matched
+        # first.
+        if "ASK_USER_QUESTION_TWICE" in text:
+            threading.Thread(
+                target=_run_twice_question_turn, args=(sid, None), daemon=True
+            ).start()
+        elif "ASK_USER_QUESTION_MULTI" in text:
+            threading.Thread(
+                target=_run_multi_question_turn, args=(sid, None), daemon=True
+            ).start()
+        elif "ASK_USER_QUESTION" in text:
+            threading.Thread(
+                target=_run_question_turn, args=(sid, None), daemon=True
+            ).start()
+        else:
+            threading.Thread(
+                target=_run_text_turn, args=(sid, None, text), daemon=True
+            ).start()
+        return
+
+    _error(msg_id, -32601, f"method not implemented: {method}")
+
+
+def main() -> int:
+    # Ignore the bridge's ``app-server --stdio`` argv — this fake only
+    # implements stdio mode, which is the only mode the bridge uses.
+    for line in sys.stdin:
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            _dispatch(json.loads(line))
+        except json.JSONDecodeError:
+            _error(None, -32700, "parse error")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

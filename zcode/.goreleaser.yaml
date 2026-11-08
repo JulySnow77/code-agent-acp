@@ -1,0 +1,28 @@
+version: 2
+
+project_name: zcode-acp-bridge
+
+builds:
+  - id: zcode-acp-bridge
+    main: ./cmd/zcode-acp-bridge
+    binary: zcode-acp-bridge
+    env: [CGO_ENABLED=0]
+    ldflags:
+      - -s -w -X main.bridgeVersion={{.Version}}
+    goos: [darwin, linux, windows]
+    goarch: [amd64, arm64]
+    ignore:
+      # windows/arm64 无实际需求, 减一个矩阵项。
+      - goos: windows
+        goarch: arm64
+
+archives:
+  - id: default
+    builds: [zcode-acp-bridge]
+    name_template: "{{ .ProjectName }}_{{ .Os }}_{{ .Arch }}"
+
+checksum:
+  name_template: checksums.txt
+
+release:
+  draft: true

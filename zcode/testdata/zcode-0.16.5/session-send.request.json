@@ -1,0 +1,8 @@
+{
+  "id": "10000004",
+  "method": "session/send",
+  "params": {
+    "content": "只回复两个字: 收到",
+    "sessionId": "sess_16bf3a5a-2943-485e-af01-8b4a2619277b"
+  }
+}

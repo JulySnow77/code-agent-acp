@@ -1,0 +1,43 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: false # 测试不依赖 upstream/,加速 checkout
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      # fake 驱动的 backend e2e 需要 python3 (ubuntu-latest 自带); 缺失时
+      # 测试自动 skip, 不会挂 CI。
+      - name: python3 availability
+        run: python3 --version
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Test
+        run: go test -race ./...
+
+      - name: Build
+        run: go build ./...
+
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - uses: golangci/golangci-lint-action@v7
+        with:
+          version: latest

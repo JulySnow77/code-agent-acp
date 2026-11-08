@@ -1,0 +1,47 @@
+# 每周一自动巡检上游 tizerluo/zcode-open-bridge, 有新提交则开 issue 汇总
+# (PORTING_PLAN §6.3)。没有新提交不开。
+name: upstream-check
+
+on:
+  schedule:
+    - cron: "0 1 * * 1" # 每周一 09:00 (UTC+8)
+  workflow_dispatch:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Run upstream check
+        id: check
+        run: |
+          set -euo pipefail
+          {
+            echo 'report<<EOF'
+            bash scripts/upstream-check.sh || true
+            echo 'EOF'
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Open sync issue if upstream moved
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          report="${{ steps.check.outputs.report }}"
+          if echo "$report" | grep -q "上游无新提交"; then
+            echo "上游无新提交, 不开 issue"
+            exit 0
+          fi
+          week=$(date -u +%G-W%V)
+          body=$(printf '%s\n' "$report" | sed 's/^/    /')
+          gh issue create \
+            --title "Upstream sync $week" \
+            --label upstream-sync \
+            --assignee "${{ github.actor }}" \
+            --body "每周上游巡检自动汇总 (PORTING_PLAN §6.3)。逐条把决定填入 docs/upstream-sync.md, 审阅完成后运行 scripts/upstream-check.sh --bump 并提交。
+
+$body" || true # issue 已存在时不挂 CI

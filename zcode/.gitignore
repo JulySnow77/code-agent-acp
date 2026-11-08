@@ -1,0 +1,19 @@
+# 构建产物
+/zcode-acp-bridge
+/dist/
+
+# 录制协议样本时的临时输出 (正式样本要整理后入库)
+/tmp-*/
+
+# 真机冒烟的本机参数 (含绝对路径与 providerId), 模板是 env.example
+/env
+/env.local
+!env.example
+
+# macOS / 本地工具产物
+.DS_Store
+.workbuddy/
+.claude/
+
+# 上游 Python 版克隆 (自带 .git, 不入库; 基线由 ../upstream.lock 锚定)
+/upstream/

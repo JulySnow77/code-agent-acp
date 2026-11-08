@@ -1,0 +1,102 @@
+{
+  "schemaVersion": 1,
+  "source": "/Volumes/BAK3T/projects/kanban/zcode-orchestrator-go",
+  "files": {
+    "Makefile": {
+      "before": "1e519cc1522333c65b28357164ba72b8b06143951e1b49b14f214baca871f1d7",
+      "after": "8e7fc4934df43fc203d66373ab4f26e9c9bcd92632a5147fa6073baf20d83b45"
+    },
+    "README.md": {
+      "before": "d2e5683e65dee3938f29a7aae2cc3744dbd79408fcf451932c7e6cad5db15f08",
+      "after": "25a15340ea4f86c4224a7f0e0448f08d9af9b2eea83aa2f9877c92890407b3cd"
+    },
+    "docs/adr/0004-execution.md": {
+      "before": null,
+      "after": "56b6ae17488c82c116f403fdb486716840344d8faff65242f4ab6f48fc69b09e"
+    },
+    "docs/tasks.md": {
+      "before": "b0a2281d395eb36a311a6b890eb1705908bf7517515d0d23d913a2a34cfcf344",
+      "after": "bca07110f40787058bc1beb652d662b3887afaa81d772eade1f7db6e90b7b69b"
+    },
+    "docs/verification-o04.md": {
+      "before": null,
+      "after": "eb7e42284f9b239bade9d67b8e405c427abb73e202c5db13410f5495a54cd6ea"
+    },
+    "go.mod": {
+      "before": "74f3677efaa562fa9686788f9f3a12d0aaa16a5d4051b88b0b1f2bcfb9f9ad14",
+      "after": "4b392162ecde3698eab689bb90c7fa150f516fdabea19bcb8495960d1d8f1630"
+    },
+    "go.sum": {
+      "before": "3ca6de191cbcf41056b3b2c7abdcbe4b55c7ececa358c900df16bad0a700ee95",
+      "after": "ed231b46d1c21912b7f85718f1d3fae7de517f9491dcd70529bca869e0a2db7c"
+    },
+    "internal/agent/agent.go": {
+      "before": null,
+      "after": "1f28f7ee97ae0ca36383854adfaea8c25556b825a4367c6d1968df153fdad53c"
+    },
+    "internal/agent/zcode/client.go": {
+      "before": null,
+      "after": "c05f438276598226bc0c2cdfa036a7e92079a31093866143f0f4d129320ceefb"
+    },
+    "internal/agent/zcode/client_test.go": {
+      "before": null,
+      "after": "112b8fc6cc5ac5423b913407d981842d01ae86e3f61224d51e6ee6043e4ffc34"
+    },
+    "internal/app/runtime.go": {
+      "before": "db3adfde5a5e12e9ea98349e3c64805973e5316a560f4a0c83a3ce0d04ceac23",
+      "after": "805c7d398eead1b3a1ede6e3ce297196ab3218fcbdb9a95dd8a6c0594e60d0ce"
+    },
+    "internal/domain/execution.go": {
+      "before": null,
+      "after": "60965dac830b08b3d771fe0ced160b45da6a9fae1e719f80dfd251c1eec105bb"
+    },
+    "internal/execution/budget_test.go": {
+      "before": null,
+      "after": "b023056f77a6ba64c32ea820421662ba8ab8fbc5a8829d56590dd976a2e5ac2c"
+    },
+    "internal/execution/process_test.go": {
+      "before": null,
+      "after": "87c7b3fe7cd569e9f2facb14b7ddf988b71311c81747351b452a2eff02fddd8c"
+    },
+    "internal/execution/process_unix.go": {
+      "before": null,
+      "after": "d9860bc5bd4abfcd4329a521e461d15b91642245467a1a642de692012034e4a5"
+    },
+    "internal/execution/spec.go": {
+      "before": null,
+      "after": "ee7bc613798bf5e6bd95781e8d324356fade5b8f1fdbdf6840f2bafbd49b9c09"
+    },
+    "internal/execution/supervisor.go": {
+      "before": null,
+      "after": "0b7ccdc3df726663ffd654742a692192af93c63e27e9edccea8c77679133fd04"
+    },
+    "internal/store/sqlite/execution.go": {
+      "before": null,
+      "after": "68d3a1213ad2157f5943e59b7d29592bb537fd56b3a22a47482a70d16989d73e"
+    },
+    "internal/store/sqlite/execution_test.go": {
+      "before": null,
+      "after": "74d6b76e37b3a60c1c4ce259c21b227b1c94b1fdd59f772bd95fff6769d82fc5"
+    },
+    "internal/store/sqlite/migrations/003_execution.sql": {
+      "before": null,
+      "after": "014399e222b499a2287892c4586af2f33f6374b87ec59c1734045ffadaad62d5"
+    },
+    "internal/store/sqlite/workspaces_test.go": {
+      "before": "df83e79b4afd81b0cf5451c1093c0db0ed6f60baa6043f95b5f6d05a251d6619",
+      "after": "29d785004806a6bdd2fea3254a2f44be3cae13b7ed80b9eb16c313c31b10aee9"
+    },
+    "internal/workspace/manager.go": {
+      "before": "0d09ebe6be6b552199340029dbe25fdab1b39fea709672cbfa300182b71acb40",
+      "after": "c7cbbd15afc52185f96a5405ec7c9261971d46e9ef600e7d8d3867d82defd22f"
+    },
+    "test/contract/execution_test.go": {
+      "before": null,
+      "after": "98e5ff0f43749debf644759bac2b1b33941b91b58913b7f2cdd80b2983c4b75d"
+    },
+    "test/fixture/zcode/main.go": {
+      "before": null,
+      "after": "2b42c1df0bbd39d46e7254b46a6d925d15c5aecceb418a5572a71139815479a4"
+    }
+  }
+}

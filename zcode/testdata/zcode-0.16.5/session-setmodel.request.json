@@ -1,0 +1,14 @@
+{
+  "id": "10000002",
+  "method": "session/setModel",
+  "params": {
+    "model": {
+      "modelId": "glm-5.2",
+      "options": {
+        "reasoningLevel": "max"
+      },
+      "providerId": "a45187b5-dbbc-4342-a6c6-a8c9d42c9304"
+    },
+    "sessionId": "sess_16bf3a5a-2943-485e-af01-8b4a2619277b"
+  }
+}

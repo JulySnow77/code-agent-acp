@@ -1,0 +1,2179 @@
+diff --git a/Makefile b/Makefile
+--- a/Makefile
++++ b/Makefile
+@@ -1,6 +1,6 @@
+ BRIDGE_DIR ?= ../zcode-open-bridge-go
+ 
+-.PHONY: build test web-build web-check test-contract check
++.PHONY: build test web-build web-check test-contract test-execution check
+ 
+ web-build:
+ 	cd web && npm ci && npm run build
+@@ -20,4 +20,8 @@
+ 	python3 scripts/check-bridge.py "$(BRIDGE_DIR)"
+ 	cd "$(BRIDGE_DIR)" && ZCODE_E2E_RACE=1 go test -count=1 -race ./test/e2e -run '^TestSDK' -timeout 180s
+ 
+-check: build web-check test test-contract
++test-execution:
++	python3 scripts/check-bridge.py "$(BRIDGE_DIR)"
++	ZORCH_TEST_BRIDGE_DIR="$(abspath $(BRIDGE_DIR))" go test -tags=contract -count=1 -race ./test/contract -timeout 120s
++
++check: build web-check test test-contract test-execution
+diff --git a/README.md b/README.md
+--- a/README.md
++++ b/README.md
+@@ -24,3 +24,5 @@
+ O02 的模块边界、恢复行为和后续限制见 [状态与存储 ADR](docs/adr/0002-state-and-storage.md)。`internal/app.Open` 按“配置校验 → 数据目录锁 → 数据库迁移 → 恢复”装配；当前命令不会自动启动它或创建用户数据库。
+ 
+ O03 使用私有 Git 快照仓库创建 detached worktree，不改写原项目 index/分支。脏目录需要显式选择纳入快照；复制规则、限额、锁和清理条件见 [工作区 ADR](docs/adr/0003-workspaces.md)。
++
++O04 实现位于当前补丁草案：`Runtime.Executor.Run(ctx, runID)` 从已保存的执行规格运行一个任务，使用真实 ACP SDK，先验证模式/模型再发送 Prompt。默认交互等待外部应答。`make test-execution` 通过实际桥接二进制和假 ZCode 检查整个执行链路。强制进程回收测试和补丁回写仍待完成，参见 [O04 验证记录](docs/verification-o04.md)。
+diff --git a/docs/adr/0004-execution.md b/docs/adr/0004-execution.md
+new file mode 100644
+--- /dev/null
++++ b/docs/adr/0004-execution.md
+@@ -0,0 +1,31 @@
++# ADR 0004 — Single-attempt execution (O04 handoff draft)
++
++## Ownership and durable ordering
++
++Runtime.Executor is assembled by app from the SQLite store, workspace manager, and ZCode adapter factory. The execution package imports protocol-independent agent types; only internal/agent/zcode imports coder/acp-go-sdk v0.13.5. No production JSON-RPC transport was introduced.
++
++Run(ctx, runID) reads the existing immutable Run snapshot as an execution.Spec. It creates one Attempt/connection epoch, prepares one isolated workspace, and records one executions row. Migration 003 is additive. Stages are claimed → process_starting → process_started → session_ready → prompt_dispatching → prompt_finished → verifying → finished. prompt_dispatching must commit before calling the SDK Prompt method; a persistence error returns without submitting it. PID, workspace cwd, session ID, confirmed model/mode, and final outcome remain attached to that Attempt. No automatic retry or cross-restart PID adoption is implemented.
++
++The specification contains schemaVersion=1, snapshotId, prompt, an explicit profile, and optional validation commands. Profiles reference absolute bridge/backend/provider paths and model/mode; credentials are not embedded in the specification. Child environments copy only PATH/HOME/USER/LOGNAME/TMPDIR/LANG/LC_ALL plus deliberately constructed ZCode configuration. They do not inherit daemon credentials or unrelated cloud environment variables.
++
++## ACP adapter
++
++The bridge starts with serve --mode build. Initialize must negotiate protocol 1 and the O01 cancelRequest capability. NewSession must report build mode; explicit mode/model changes must read back consistently before Prompt. One connection is bound to one session. Notifications with another session ID fail execution. Filesystem/terminal callbacks are unadvertised and return unsupported. Production SDK logging is discarded; normalized notifications are persisted through the callback, and a storage error cancels execution rather than silently dropping output.
++
++Normalized agent events retain the typed SDK update payload. Final text is a bounded summary with an explicit truncation flag; complete individual events remain in the event log. A final end_turn starts the separate validation phase and is not itself a test-pass claim.
++
++Permissions/forms are first persisted as Interaction records and place the Attempt in waiting_input. With no supplied Answer callback they wait until cancellation/deadline, never auto-approve. With an explicit callback the decision commits first; adapter validation checks permitted option IDs or the O04 primitive boolean/string/enum form subset, and a separate callback records reply_attempted before returning the SDK response. Rich schemas, persistent API answer routing, idempotency keys, and exactly-once broker decisions remain O05. Answer callbacks must honor context cancellation.
++
++A cumulative active timer pauses during human waiting and resumes with its remaining budget. It is not reset by repeated questions. A separate wall deadline remains active. Expiry invalidates interactions and times out the owning Attempt. Already committed terminal state is preserved when recording uncertain teardown; it does not by itself prove that a process has exited.
++
++## Processes, verification, and results
++
++Each bridge and each validation command starts in its own process group. The current live handle owns its PID/group; recovery never signals an arbitrary database PID. Shutdown requests session/cancel when needed, closes input, waits for cooperative exit, then attempts SIGTERM and SIGKILL with bounded waits. It requires the group to disappear and the direct child to be reaped. If teardown or callback draining cannot be confirmed, the workspace stays durably held and the result reports ProcessStopped=false. Detached processes that deliberately leave the managed group require stronger supervision/containment; this is not an OS sandbox.
++
++The bridge is stopped before validation so the model cannot continue changing the checked tree. Validation uses executable + argv + a workspace-contained directory, timeout, and expected exit code. Captured diagnostic tails are bounded and known credential fields are redacted; byte/truncation metadata accompanies output. No validation steps yields validation=not_configured, never passed. A failing command yields a failed outcome.
++
++After process shutdown, the still-held workspace is scanned for file hashes and changes. Outcome/state/events and an execution:<attempt> workspace reference commit together, then the lease can be released. Persistence or cleanup failure retains ownership. O09 will provide export/download and remove the output reference only after its retention/export contract permits it. Result size limits can fail persistence; callers must not treat that as successful completion.
++
++## Current completion limits
++
++The managed session could not write the real sibling orchestrator directory, so this is a reviewed patch from a temporary copy. It also denied the forced process-group signal in TestProcessGroupStopsDescendant. Cooperative full-chain tests and storage/adapter checks passed, but O04 is not complete until the patch is applied and the forced-stop check passes on a normal local process-control environment. No real model was run, no CLI execution command was added, and no daemon was installed.
+diff --git a/docs/tasks.md b/docs/tasks.md
+--- a/docs/tasks.md
++++ b/docs/tasks.md
+@@ -1,6 +1,6 @@
+ # Implementation tasks
+ 
+-Design baseline: [development-plan](development-plan.md). Current slice: O03.
++Design baseline: [development-plan](development-plan.md). Current slice: O04 (handoff draft; source application and forced-stop verification pending).
+ 
+ | ID | Status | Delivery |
+ |---|---|---|
+@@ -8,11 +8,13 @@
+ | O01 | Done (local SDK/fake validation) | Real SDK contract suite and bridge cancellation/EOF/stop fixes; compatibility contract in bridge docs/SDK_COMPATIBILITY.md |
+ | O02 | Done (local tests + Linux cross-build) | Domain transitions, SQLite migrations and transactional event log, versioned configuration, single-instance data-directory lock |
+ | O03 | Done (local tests + Linux cross-build) | Project/workspace ownership, Git baselines and snapshots, workspace locks, safe paths |
+-| O04 | Next | Process supervisor and ZCode SDK adapter; one task through execution, validation, and teardown |
++| O04 | Implemented in temporary copy; pending application and forced-stop check | Process supervisor and ZCode SDK adapter; one task through execution, validation, and teardown |
+ | O05–O17 | Not started | See the design baseline for dependencies and acceptance criteria |
+ 
+-## Next slice: O04
++## Pending before O04 completion
+ 
+-Wire the persisted Attempt and workspace Lease to a managed bridge/ZCode process tree. Negotiate SDK capabilities, bind a single session, verify model/mode, record prompt dispatch before sending, persist normalized events, collect outcomes, and stop/reap processes before releasing the workspace. Exercise the complete path with fake ZCode, including launch failure, cancellation, and connection loss. Real model runs require a separately selected workspace and model-usage authorization.
++Apply the reviewed handoff patch to the real orchestrator checkout and run the forced process-group cleanup test in an environment that permits sending signals to owned child groups. The current managed session allowed writes only to the bridge repository and temporary directories; its forced-stop test returned EPERM. Do not mark O04 complete from the successful cooperative SDK contract suite alone.
+ 
+-O03 details: [workspace ADR](adr/0003-workspaces.md) and [verification](verification-o03.md). O02 details remain in [state/storage ADR](adr/0002-state-and-storage.md) and [verification](verification-o02.md). CLI remains version-only; API/Web business features follow O08/O10.
++O04 adds persisted execution stages, the real SDK adapter, owned process groups, explicit interactive callbacks, cumulative active budgets, actual validation commands, result manifests, and pinned workspace outcomes. See [execution ADR](adr/0004-execution.md) and [verification](verification-o04.md).
++
++After O04 is applied and verified, O05 adds the persistent interaction broker and complete schema/idempotent answer delivery. CLI remains version-only; API/Web business features follow O08/O10.
+diff --git a/docs/verification-o04.md b/docs/verification-o04.md
+new file mode 100644
+--- /dev/null
++++ b/docs/verification-o04.md
+@@ -0,0 +1,33 @@
++# O04 verification — temporary-copy handoff
++
++The implementation was developed in `/private/tmp/zorch-o04-gr474grt/worktree` from the O03 sibling checkout. The current managed session made `/Volumes/BAK3T/projects/kanban/zcode-orchestrator-go` read-only. The real checkout was not modified; apply the reviewed handoff before treating this as project progress.
++
++## Passed checks
++
++- Full real-SDK → actual bridge → fake ZCode contract suite with the race detector: PASS (5.674s). Uses the production two-second cooperative shutdown allowance.
++- Contracts exercise model failure/mismatch without Prompt, file modification in the isolated workspace, actual validation commands, durable dispatch-before-output ordering, result persistence, explicit permission/form answers, unanswered permission expiry, active cancellation, and failed validation.
++- Focused race suites for agent, SQLite, app, workspace, configuration, and domain: PASS.
++- Active-budget pause/resume, child environment allowlist, and diagnostic credential-redaction tests: PASS.
++- `go vet ./...`: PASS.
++- `CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build ./...`: PASS (cross-build only).
++
++## Unresolved check
++
++`go test -count=1 -race ./...` FAILS at `TestProcessGroupStopsDescendant` because the managed sandbox rejects the group signal with `operation not permitted` (EPERM). All other packages in that run passed. This test remains enabled with its original safety assertion; it was not skipped or suppressed. Its fixture exits cooperatively during cleanup so the denied signal does not require leaving the test writer running.
++
++The first contract attempt used a 100ms shutdown allowance and also reached the denied forced-stop path on expiry. The contract now uses the actual production two-second allowance, and cooperative shutdown passes. This does not validate SIGTERM/SIGKILL escalation: the separate forced-stop test still fails and must pass outside the restricted sandbox before O04 completion.
++
++## Implementation evidence
++
++Migration 003 stores execution phases and output. A fault-injection test proves that a failed dispatch event rolls back the phase instead of advancing it. Final outcome/state/events and a workspace result reference commit together; a pinned result cannot be cleaned. Terminal attempts reject late output events and outcome replacement. The O02 database upgrade test was updated to expect all three additive migrations; historical migrations were not edited.
++
++Model/mode readback is mandatory before Prompt. Pending interactions are recorded before waiting and are not automatically accepted. Primitive answers are validated before reply-attempt audit. Active time pauses during waits and resumes without resetting. End-turn is followed by separate validation; no checks are recorded as not_configured rather than passed. Files are collected only after confirmed process shutdown. If cleanup or persistence cannot be confirmed, the durable workspace hold remains.
++
++## Remaining work
++
++1. Verify the baseline and apply the handoff patch to the real orchestrator checkout.
++2. Run `make test` in a normal local environment that permits signals to owned child process groups, especially TestProcessGroupStopsDescendant.
++3. Run `make test-execution BRIDGE_DIR=../zcode-open-bridge-go` against the matching bridge source.
++4. Only then mark O04 complete and proceed to the O05 persistent interaction broker.
++
++No real ZCode model, installation, public endpoint, or daemon was used. CLI remains version-only. The Answer hook is an internal context-aware callback, not the O05 API broker. Cross-restart process reconciliation, escaped process groups, full form schemas, exports, and public task APIs remain later work.
+diff --git a/go.mod b/go.mod
+--- a/go.mod
++++ b/go.mod
+@@ -8,6 +8,7 @@
+ )
+ 
+ require (
++	github.com/coder/acp-go-sdk v0.13.5
+ 	github.com/dustin/go-humanize v1.0.1 // indirect
+ 	github.com/google/uuid v1.6.0 // indirect
+ 	github.com/mattn/go-isatty v0.0.24 // indirect
+diff --git a/go.sum b/go.sum
+--- a/go.sum
++++ b/go.sum
+@@ -48,3 +48,5 @@
+ modernc.org/strutil v1.2.1/go.mod h1:EHkiggD70koQxjVdSBM3JKM7k6L0FbGE5eymy9i3B9A=
+ modernc.org/token v1.1.0 h1:Xl7Ap9dKaEs5kLoOQeQmPWevfnk/DM5qcLcYlA8ys6Y=
+ modernc.org/token v1.1.0/go.mod h1:UGzOrNV1mAFSEB63lOFHIpNRUVMvYTc6yu1SMY/XTDM=
++github.com/coder/acp-go-sdk v0.13.5 h1:LI9jq5xon7xslaYlnoktvTVyDlE37yIk2daT7N9ASYk=
++github.com/coder/acp-go-sdk v0.13.5/go.mod h1:yKzM/3R9uELp4+nBAwwtkS0aN1FOFjo11CNPy37yFko=
+diff --git a/internal/agent/agent.go b/internal/agent/agent.go
+new file mode 100644
+--- /dev/null
++++ b/internal/agent/agent.go
+@@ -0,0 +1,45 @@
++// Package agent defines the protocol-independent boundary consumed by execution.
++package agent
++
++import (
++	"context"
++	"encoding/json"
++	"errors"
++	"io"
++)
++
++var ErrDisconnected = errors.New("agent connection lost")
++var ErrInvalidAnswer = errors.New("invalid interaction answer")
++
++type Event struct {
++	Kind    string
++	Payload json.RawMessage
++}
++type Interaction struct {
++	Kind    string
++	Request json.RawMessage
++}
++type Answer struct {
++	InteractionID string         `json:"-"`
++	Action        string         `json:"action"`
++	OptionID      string         `json:"optionId,omitempty"`
++	Content       map[string]any `json:"content,omitempty"`
++}
++type Hooks struct {
++	Event       func(context.Context, Event) error
++	Interaction func(context.Context, Interaction) (Answer, error)
++	Reply       func(context.Context, string) error
++	Fail        context.CancelCauseFunc
++}
++type Session struct{ ID, Model, Mode string }
++type Result struct {
++	StopReason, Text string
++	TextTruncated    bool
++}
++type Client interface {
++	Prepare(context.Context, string, string, string) (Session, error)
++	Prompt(context.Context, string) (Result, error)
++	Cancel(context.Context) error
++	Close(context.Context) error
++}
++type Factory func(context.Context, io.Writer, io.Reader, Hooks) Client
+diff --git a/internal/agent/zcode/client.go b/internal/agent/zcode/client.go
+new file mode 100644
+--- /dev/null
++++ b/internal/agent/zcode/client.go
+@@ -0,0 +1,373 @@
++// Package zcode is the only production package that imports ACP SDK types.
++package zcode
++
++import (
++	"context"
++	"encoding/json"
++	"errors"
++	"fmt"
++	"io"
++	"log/slog"
++	"reflect"
++	"sync"
++
++	acp "github.com/coder/acp-go-sdk"
++	"zcode-orchestrator-go/internal/agent"
++)
++
++type client struct {
++	conn                *acp.ClientSideConnection
++	ctx                 context.Context
++	cancel              context.CancelFunc
++	hooks               agent.Hooks
++	mu                  sync.Mutex
++	closed              bool
++	wg                  sync.WaitGroup
++	session, mode, text string
++	truncated           bool
++	err                 error
++}
++
++func New(ctx context.Context, in io.Writer, out io.Reader, hooks agent.Hooks) agent.Client {
++	life, cancel := context.WithCancel(ctx)
++	c := &client{ctx: life, cancel: cancel, hooks: hooks}
++	c.conn = acp.NewClientSideConnection(c, in, out)
++	c.conn.SetLogger(slog.New(slog.NewTextHandler(io.Discard, nil)))
++	return c
++}
++func (c *client) fail(err error) error {
++	if err == nil {
++		return nil
++	}
++	c.mu.Lock()
++	if c.err == nil {
++		c.err = err
++	}
++	c.mu.Unlock()
++	if c.hooks.Fail != nil {
++		c.hooks.Fail(err)
++	}
++	return err
++}
++func (c *client) enter(ctx context.Context) (context.Context, func(), error) {
++	c.mu.Lock()
++	if c.closed {
++		c.mu.Unlock()
++		return nil, nil, context.Canceled
++	}
++	c.wg.Add(1)
++	c.mu.Unlock()
++	merged, cancel := context.WithCancel(ctx)
++	stop := context.AfterFunc(c.ctx, cancel)
++	return merged, func() { stop(); cancel(); c.wg.Done() }, nil
++}
++func (c *client) Prepare(ctx context.Context, cwd, model, mode string) (agent.Session, error) {
++	var result agent.Session
++	init, err := c.conn.Initialize(ctx, acp.InitializeRequest{ProtocolVersion: 1, ClientCapabilities: acp.ClientCapabilities{Meta: map[string]any{"_zcode": map[string]any{"cancelRequest": true}}, Elicitation: &acp.ElicitationCapabilities{Form: &acp.ElicitationFormCapabilities{}}}})
++	if err != nil {
++		return result, err
++	}
++	meta, _ := init.Meta["_zcode"].(map[string]any)
++	if init.ProtocolVersion != 1 || meta["cancelRequest"] != true {
++		return result, errors.New("bridge lacks required cancellation capability")
++	}
++	session, err := c.conn.NewSession(ctx, acp.NewSessionRequest{Cwd: cwd, McpServers: []acp.McpServer{}})
++	if err != nil {
++		return result, err
++	}
++	if session.SessionId == "" || session.Modes == nil || session.Modes.CurrentModeId != "build" {
++		return result, errors.New("new session did not confirm build mode")
++	}
++	c.mu.Lock()
++	c.session = string(session.SessionId)
++	c.mode = string(session.Modes.CurrentModeId)
++	c.mu.Unlock()
++	if _, err = c.conn.SetSessionMode(ctx, acp.SetSessionModeRequest{SessionId: session.SessionId, ModeId: acp.SessionModeId(mode)}); err != nil {
++		return result, err
++	}
++	config, err := c.conn.SetSessionConfigOption(ctx, acp.SetSessionConfigOptionRequest{ValueId: &acp.SetSessionConfigOptionValueId{SessionId: session.SessionId, ConfigId: "model", Value: acp.SessionConfigValueId(model)}})
++	if err != nil {
++		return result, err
++	}
++	confirmed := false
++	for _, option := range config.ConfigOptions {
++		if option.Select != nil && option.Select.Id == "model" && string(option.Select.CurrentValue) == model {
++			confirmed = true
++		}
++	}
++	c.mu.Lock()
++	actualMode := c.mode
++	callbackErr := c.err
++	c.mu.Unlock()
++	if callbackErr != nil {
++		return result, callbackErr
++	}
++	if !confirmed || actualMode != mode {
++		return result, errors.New("model/mode readback mismatch")
++	}
++	return agent.Session{ID: string(session.SessionId), Model: model, Mode: actualMode}, nil
++}
++func (c *client) Prompt(ctx context.Context, prompt string) (agent.Result, error) {
++	c.mu.Lock()
++	sid := c.session
++	c.mu.Unlock()
++	if sid == "" {
++		return agent.Result{}, errors.New("session not prepared")
++	}
++	response, err := c.conn.Prompt(ctx, acp.PromptRequest{SessionId: acp.SessionId(sid), Prompt: []acp.ContentBlock{acp.TextBlock(prompt)}})
++	c.mu.Lock()
++	result := agent.Result{StopReason: string(response.StopReason), Text: c.text, TextTruncated: c.truncated}
++	callbackErr := c.err
++	c.mu.Unlock()
++	if callbackErr != nil {
++		return result, callbackErr
++	}
++	if err != nil {
++		select {
++		case <-c.conn.Done():
++			return result, fmt.Errorf("%w: %v", agent.ErrDisconnected, err)
++		default:
++		}
++		return result, err
++	}
++	return result, nil
++}
++func (c *client) Cancel(ctx context.Context) error {
++	c.mu.Lock()
++	sid := c.session
++	c.mu.Unlock()
++	if sid == "" {
++		return nil
++	}
++	return c.conn.Cancel(ctx, acp.CancelNotification{SessionId: acp.SessionId(sid)})
++}
++func (c *client) Close(ctx context.Context) error {
++	c.mu.Lock()
++	c.closed = true
++	c.mu.Unlock()
++	c.cancel()
++	done := make(chan struct{})
++	go func() { c.wg.Wait(); close(done) }()
++	select {
++	case <-done:
++		return nil
++	case <-ctx.Done():
++		return ctx.Err()
++	}
++}
++func (c *client) SessionUpdate(ctx context.Context, p acp.SessionNotification) error {
++	ctx, leave, err := c.enter(ctx)
++	if err != nil {
++		return err
++	}
++	defer leave()
++	c.mu.Lock()
++	sid := c.session
++	if sid == "" || string(p.SessionId) != sid {
++		c.mu.Unlock()
++		return c.fail(errors.New("notification belongs to an unbound session"))
++	}
++	kind := "agent.other"
++	switch {
++	case p.Update.AgentMessageChunk != nil:
++		kind = "agent.message"
++		if p.Update.AgentMessageChunk.Content.Text != nil {
++			chunk := p.Update.AgentMessageChunk.Content.Text.Text
++			remaining := (64 << 10) - len(c.text)
++			if len(chunk) > remaining {
++				chunk = chunk[:remaining]
++				c.truncated = true
++			}
++			c.text += chunk
++		}
++	case p.Update.AgentThoughtChunk != nil:
++		kind = "agent.thought"
++	case p.Update.ToolCall != nil || p.Update.ToolCallUpdate != nil:
++		kind = "agent.tool"
++	case p.Update.UsageUpdate != nil:
++		kind = "agent.usage"
++	case p.Update.CurrentModeUpdate != nil:
++		kind = "agent.mode"
++		c.mode = string(p.Update.CurrentModeUpdate.CurrentModeId)
++	case p.Update.ConfigOptionUpdate != nil:
++		kind = "agent.config"
++	case p.Update.Plan != nil:
++		kind = "agent.plan"
++	}
++	c.mu.Unlock()
++	raw, err := json.Marshal(p.Update)
++	if err != nil {
++		return c.fail(err)
++	}
++	if c.hooks.Event == nil {
++		return c.fail(errors.New("event persistence callback missing"))
++	}
++	return c.fail(c.hooks.Event(ctx, agent.Event{Kind: kind, Payload: raw}))
++}
++func (c *client) ask(ctx context.Context, kind string, request any) (agent.Answer, error) {
++	raw, err := json.Marshal(request)
++	if err != nil {
++		return agent.Answer{}, err
++	}
++	if c.hooks.Interaction == nil {
++		<-ctx.Done()
++		return agent.Answer{}, ctx.Err()
++	}
++	answer, err := c.hooks.Interaction(ctx, agent.Interaction{Kind: kind, Request: raw})
++	if err != nil {
++		return answer, c.fail(err)
++	}
++	return answer, nil
++}
++func (c *client) RequestPermission(ctx context.Context, p acp.RequestPermissionRequest) (acp.RequestPermissionResponse, error) {
++	ctx, leave, err := c.enter(ctx)
++	if err != nil {
++		return acp.RequestPermissionResponse{}, err
++	}
++	defer leave()
++	c.mu.Lock()
++	sid := c.session
++	c.mu.Unlock()
++	if sid == "" || string(p.SessionId) != sid {
++		return acp.RequestPermissionResponse{}, c.fail(errors.New("permission session mismatch"))
++	}
++	a, err := c.ask(ctx, "permission", p)
++	if err != nil {
++		return acp.RequestPermissionResponse{}, err
++	}
++	if a.Action == "cancel" || a.Action == "decline" {
++		if err = c.reply(ctx, a); err != nil {
++			return acp.RequestPermissionResponse{}, err
++		}
++		return acp.RequestPermissionResponse{Outcome: acp.RequestPermissionOutcome{Cancelled: &acp.RequestPermissionOutcomeCancelled{}}}, nil
++	}
++	if a.Action == "accept" {
++		for _, option := range p.Options {
++			if string(option.OptionId) == a.OptionID {
++				if err = c.reply(ctx, a); err != nil {
++					return acp.RequestPermissionResponse{}, err
++				}
++				return acp.RequestPermissionResponse{Outcome: acp.RequestPermissionOutcome{Selected: &acp.RequestPermissionOutcomeSelected{OptionId: option.OptionId}}}, nil
++			}
++		}
++	}
++	return acp.RequestPermissionResponse{}, c.fail(agent.ErrInvalidAnswer)
++}
++func (c *client) UnstableCreateElicitation(ctx context.Context, p acp.UnstableCreateElicitationRequest) (acp.UnstableCreateElicitationResponse, error) {
++	ctx, leave, err := c.enter(ctx)
++	if err != nil {
++		return acp.UnstableCreateElicitationResponse{}, err
++	}
++	defer leave()
++	if p.Form == nil {
++		return acp.UnstableCreateElicitationResponse{}, c.fail(agent.ErrInvalidAnswer)
++	}
++	a, err := c.ask(ctx, "form", p)
++	if err != nil {
++		return acp.UnstableCreateElicitationResponse{}, err
++	}
++	switch a.Action {
++	case "cancel":
++		if err = c.reply(ctx, a); err != nil {
++			return acp.UnstableCreateElicitationResponse{}, err
++		}
++		return acp.UnstableCreateElicitationResponse{Cancel: &acp.UnstableCreateElicitationCancel{}}, nil
++	case "decline":
++		if err = c.reply(ctx, a); err != nil {
++			return acp.UnstableCreateElicitationResponse{}, err
++		}
++		return acp.UnstableCreateElicitationResponse{Decline: &acp.UnstableCreateElicitationDecline{}}, nil
++	case "accept":
++		raw, _ := json.Marshal(p.Form.RequestedSchema)
++		if err = validateForm(raw, a.Content); err != nil {
++			return acp.UnstableCreateElicitationResponse{}, c.fail(err)
++		}
++		if err = c.reply(ctx, a); err != nil {
++			return acp.UnstableCreateElicitationResponse{}, err
++		}
++		return acp.UnstableCreateElicitationResponse{Accept: &acp.UnstableCreateElicitationAccept{Content: a.Content}}, nil
++	}
++	return acp.UnstableCreateElicitationResponse{}, c.fail(agent.ErrInvalidAnswer)
++}
++
++// O04 accepts only the primitive boolean/string/enum forms already exercised by
++// the bridge contract. Rich form constraints require the O05 validator.
++func validateForm(raw []byte, content map[string]any) error {
++	var schema struct {
++		Properties map[string]map[string]any `json:"properties"`
++		Required   []string                  `json:"required"`
++	}
++	if json.Unmarshal(raw, &schema) != nil || schema.Properties == nil || content == nil {
++		return agent.ErrInvalidAnswer
++	}
++	for _, key := range schema.Required {
++		if _, ok := content[key]; !ok {
++			return agent.ErrInvalidAnswer
++		}
++	}
++	for key, value := range content {
++		prop, ok := schema.Properties[key]
++		if !ok {
++			return agent.ErrInvalidAnswer
++		}
++		for constraint := range prop {
++			switch constraint {
++			case "type", "title", "description", "enum", "default", "_meta":
++			default:
++				return agent.ErrInvalidAnswer
++			}
++		}
++		switch prop["type"] {
++		case "string":
++			if _, ok = value.(string); !ok {
++				return agent.ErrInvalidAnswer
++			}
++		case "boolean":
++			if _, ok = value.(bool); !ok {
++				return agent.ErrInvalidAnswer
++			}
++		default:
++			return agent.ErrInvalidAnswer
++		}
++		if options, ok := prop["enum"].([]any); ok {
++			found := false
++			for _, option := range options {
++				if reflect.DeepEqual(option, value) {
++					found = true
++				}
++			}
++			if !found {
++				return agent.ErrInvalidAnswer
++			}
++		}
++	}
++	return nil
++}
++func (*client) ReadTextFile(context.Context, acp.ReadTextFileRequest) (acp.ReadTextFileResponse, error) {
++	return acp.ReadTextFileResponse{}, acp.NewMethodNotFound("ReadTextFile")
++}
++func (*client) WriteTextFile(context.Context, acp.WriteTextFileRequest) (acp.WriteTextFileResponse, error) {
++	return acp.WriteTextFileResponse{}, acp.NewMethodNotFound("WriteTextFile")
++}
++func (*client) CreateTerminal(context.Context, acp.CreateTerminalRequest) (acp.CreateTerminalResponse, error) {
++	return acp.CreateTerminalResponse{}, acp.NewMethodNotFound("CreateTerminal")
++}
++func (*client) KillTerminal(context.Context, acp.KillTerminalRequest) (acp.KillTerminalResponse, error) {
++	return acp.KillTerminalResponse{}, acp.NewMethodNotFound("KillTerminal")
++}
++func (*client) TerminalOutput(context.Context, acp.TerminalOutputRequest) (acp.TerminalOutputResponse, error) {
++	return acp.TerminalOutputResponse{}, acp.NewMethodNotFound("TerminalOutput")
++}
++func (*client) ReleaseTerminal(context.Context, acp.ReleaseTerminalRequest) (acp.ReleaseTerminalResponse, error) {
++	return acp.ReleaseTerminalResponse{}, acp.NewMethodNotFound("ReleaseTerminal")
++}
++func (*client) WaitForTerminalExit(context.Context, acp.WaitForTerminalExitRequest) (acp.WaitForTerminalExitResponse, error) {
++	return acp.WaitForTerminalExitResponse{}, acp.NewMethodNotFound("WaitForTerminalExit")
++}
++
++func (c *client) reply(ctx context.Context, a agent.Answer) error {
++	if c.hooks.Reply == nil || a.InteractionID == "" {
++		return c.fail(errors.New("reply audit callback missing"))
++	}
++	return c.fail(c.hooks.Reply(ctx, a.InteractionID))
++}
+diff --git a/internal/agent/zcode/client_test.go b/internal/agent/zcode/client_test.go
+new file mode 100644
+--- /dev/null
++++ b/internal/agent/zcode/client_test.go
+@@ -0,0 +1,18 @@
++package zcode
++
++import "testing"
++
++func TestFormAnswersFailClosed(t *testing.T) {
++	schema := []byte(`{"type":"object","properties":{"plan":{"type":"string","enum":["approve"]},"empty":{"type":"boolean"}},"required":["plan"]}`)
++	if err := validateForm(schema, map[string]any{"plan": "approve", "empty": false}); err != nil {
++		t.Fatal(err)
++	}
++	for _, answer := range []map[string]any{{"plan": "Approve"}, {"plan": true}, {"plan": "approve", "unknown": true}, {"empty": false}} {
++		if validateForm(schema, answer) == nil {
++			t.Fatalf("invalid form accepted: %v", answer)
++		}
++	}
++	if validateForm([]byte(`{"properties":{"text":{"type":"string","pattern":"^yes$"}}}`), map[string]any{"text": "no"}) == nil {
++		t.Fatal("unsupported constraint silently ignored")
++	}
++}
+diff --git a/internal/app/runtime.go b/internal/app/runtime.go
+--- a/internal/app/runtime.go
++++ b/internal/app/runtime.go
+@@ -6,8 +6,11 @@
+ 	"errors"
+ 	"path/filepath"
+ 	"sync"
++	"time"
+ 
++	"zcode-orchestrator-go/internal/agent/zcode"
+ 	"zcode-orchestrator-go/internal/config"
++	"zcode-orchestrator-go/internal/execution"
+ 	"zcode-orchestrator-go/internal/store/sqlite"
+ 	"zcode-orchestrator-go/internal/workspace"
+ )
+@@ -15,6 +18,7 @@
+ type Runtime struct {
+ 	Store      *sqlite.Store
+ 	Workspaces *workspace.Manager
++	Executor   *execution.Supervisor
+ 	Recovered  int
+ 	lock       *config.DataLock
+ 	once       sync.Once
+@@ -47,7 +51,12 @@
+ 	if err != nil {
+ 		return fail(errors.Join(err, store.Close()))
+ 	}
+-	return &Runtime{Store: store, Workspaces: workspaces, Recovered: recovered, lock: lock}, nil
++	options := execution.DefaultOptions()
++	options.Active = time.Duration(c.Timeouts.Active)
++	options.Human = time.Duration(c.Timeouts.Human)
++	options.Wall = time.Duration(c.Timeouts.Wall)
++	executor := &execution.Supervisor{Repo: store, Workspaces: workspaces, NewAgent: zcode.New, Options: options}
++	return &Runtime{Store: store, Workspaces: workspaces, Executor: executor, Recovered: recovered, lock: lock}, nil
+ }
+ func (r *Runtime) Close() error {
+ 	r.once.Do(func() { r.err = errors.Join(r.Workspaces.Close(), r.Store.Close(), r.lock.Close()) })
+diff --git a/internal/domain/execution.go b/internal/domain/execution.go
+new file mode 100644
+--- /dev/null
++++ b/internal/domain/execution.go
+@@ -0,0 +1,9 @@
++package domain
++
++import "encoding/json"
++
++type Execution struct {
++	AttemptID, WorkspaceID, Stage, SessionID, Cwd, Model, Mode string
++	PID                                                        int
++	Outcome                                                    json.RawMessage
++}
+diff --git a/internal/execution/budget_test.go b/internal/execution/budget_test.go
+new file mode 100644
+--- /dev/null
++++ b/internal/execution/budget_test.go
+@@ -0,0 +1,32 @@
++package execution
++
++import (
++	"strings"
++	"testing"
++	"time"
++)
++
++func TestActiveBudgetPausesForInteraction(t *testing.T) {
++	expired := make(chan struct{}, 1)
++	budget := newActiveBudget(60*time.Millisecond, func() { expired <- struct{}{} })
++	defer budget.Close()
++	budget.Pause()
++	select {
++	case <-expired:
++		t.Fatal("human wait consumed active budget")
++	case <-time.After(120 * time.Millisecond):
++	}
++	budget.Resume()
++	select {
++	case <-expired:
++	case <-time.After(time.Second):
++		t.Fatal("active budget did not resume")
++	}
++}
++func TestDiagnosticCredentialsAreRedacted(t *testing.T) {
++	for _, text := range []string{"Authorization: Bearer top-secret-value", "Authorization: Basic top-secret-value", "api_key=top-secret-value", `password="top-secret-value with spaces"`, `{"token":"top-secret-value"}`} {
++		if got := redact(text); strings.Contains(got, "top-secret-value") || strings.Contains(got, "with spaces") {
++			t.Fatalf("credential leaked: %s", got)
++		}
++	}
++}
+diff --git a/internal/execution/process_test.go b/internal/execution/process_test.go
+new file mode 100644
+--- /dev/null
++++ b/internal/execution/process_test.go
+@@ -0,0 +1,66 @@
++//go:build darwin || linux
++
++package execution
++
++import (
++	"context"
++	"os"
++	"path/filepath"
++	"testing"
++	"time"
++)
++
++func TestProcessGroupStopsDescendant(t *testing.T) {
++	dir := t.TempDir()
++	marker := filepath.Join(dir, "still-running")
++	stop := filepath.Join(dir, "stop")
++	defer os.WriteFile(stop, []byte("stop"), 0600)
++	// The shell leaves a background writer in the same process group.
++	p, err := startProcess("/bin/sh", []string{"-c", `(while [ ! -f "$2" ]; do echo tick >> "$1"; sleep 0.05; done) & wait`, "fixture", marker, stop}, dir, []string{"PATH=/usr/bin:/bin"})
++	if err != nil {
++		t.Fatal(err)
++	}
++	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
++	defer cancel()
++	t.Cleanup(func() {
++		os.WriteFile(stop, []byte("stop"), 0600)
++		select {
++		case <-p.done:
++		case <-time.After(2 * time.Second):
++			t.Error("cooperative fixture cleanup timed out")
++		}
++	})
++	defer p.Stop(context.Background(), 50*time.Millisecond)
++	deadline := time.Now().Add(time.Second)
++	for {
++		if _, err := os.Stat(marker); err == nil {
++			break
++		}
++		if time.Now().After(deadline) {
++			t.Fatal("writer never started")
++		}
++		time.Sleep(10 * time.Millisecond)
++	}
++	if err = p.Stop(ctx, 50*time.Millisecond); err != nil {
++		t.Fatal(err)
++	}
++	before, err := os.ReadFile(marker)
++	if err != nil {
++		t.Fatal(err)
++	}
++	time.Sleep(120 * time.Millisecond)
++	after, _ := os.ReadFile(marker)
++	if string(after) != string(before) {
++		t.Fatal("descendant kept writing after cleanup")
++	}
++}
++func TestChildEnvironmentDoesNotInheritOwnerCredential(t *testing.T) {
++	t.Setenv("ZORCH_OWNER_TOKEN", "test-private-owner")
++	t.Setenv("UNRELATED_CLOUD_KEY", "test-private-cloud")
++	env := childEnvironment(Profile{ProviderConfig: "/provider", BackendExecutable: "/backend"}, time.Second, time.Second)
++	for _, entry := range env {
++		if entry == "ZORCH_OWNER_TOKEN=test-private-owner" || entry == "UNRELATED_CLOUD_KEY=test-private-cloud" {
++			t.Fatal("owner credentials inherited")
++		}
++	}
++}
+diff --git a/internal/execution/process_unix.go b/internal/execution/process_unix.go
+new file mode 100644
+--- /dev/null
++++ b/internal/execution/process_unix.go
+@@ -0,0 +1,251 @@
++//go:build darwin || linux
++
++package execution
++
++import (
++	"context"
++	"errors"
++	"fmt"
++	"io"
++	"os"
++	"os/exec"
++	"regexp"
++	"sync"
++	"syscall"
++	"time"
++)
++
++var ErrCleanupUncertain = errors.New("owned process group did not stop; workspace remains held")
++
++type tail struct {
++	mu    sync.Mutex
++	data  []byte
++	total int64
++}
++
++func (t *tail) Write(b []byte) (int, error) {
++	t.mu.Lock()
++	defer t.mu.Unlock()
++	t.total += int64(len(b))
++	const max = 64 << 10
++	if len(b) >= max {
++		t.data = append(t.data[:0], b[len(b)-max:]...)
++	} else {
++		t.data = append(t.data, b...)
++		if len(t.data) > max {
++			t.data = append([]byte(nil), t.data[len(t.data)-max:]...)
++		}
++	}
++	return len(b), nil
++}
++
++var authorizationPattern = regexp.MustCompile(`(?i)(authorization["':= ]+)[^\r\n,}]+`)
++var bearerPattern = regexp.MustCompile(`(?i)(bearer\s+)[^\s,"'}]+`)
++var credentialPattern = regexp.MustCompile(`(?i)(api[_-]?key|token|password|secret)(\s*["']?\s*[:=]\s*|\s+)("[^"]*"|'[^']*'|[^\s,;}]+)`)
++
++func redact(s string) string {
++	s = authorizationPattern.ReplaceAllString(s, "${1}[REDACTED]")
++	s = bearerPattern.ReplaceAllString(s, "${1}[REDACTED]")
++	return credentialPattern.ReplaceAllString(s, "${1}${2}[REDACTED]")
++}
++
++func (t *tail) summary() (int64, bool) {
++	t.mu.Lock()
++	defer t.mu.Unlock()
++	return t.total, t.total > int64(len(t.data))
++}
++
++func (t *tail) text() string {
++	t.mu.Lock()
++	defer t.mu.Unlock()
++	data := t.data
++	if len(data) > 16<<10 {
++		data = data[len(data)-(16<<10):]
++	}
++	return redact(string(data))
++}
++
++type process struct {
++	cmd     *exec.Cmd
++	stdin   *os.File
++	stdout  *os.File
++	stderr  tail
++	done    chan struct{}
++	err     error
++	stopMu  sync.Mutex
++	stopped bool
++}
++
++func startProcess(binary string, args []string, cwd string, env []string) (*process, error) {
++	childIn, in, err := os.Pipe()
++	if err != nil {
++		return nil, err
++	}
++	out, childOut, err := os.Pipe()
++	if err != nil {
++		childIn.Close()
++		in.Close()
++		return nil, err
++	}
++	p := &process{stdin: in, stdout: out, done: make(chan struct{})}
++	p.cmd = exec.Command(binary, args...)
++	p.cmd.Dir = cwd
++	p.cmd.Env = env
++	p.cmd.Stdin = childIn
++	p.cmd.Stdout = childOut
++	p.cmd.Stderr = &p.stderr
++	p.cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
++	if err = p.cmd.Start(); err != nil {
++		childIn.Close()
++		childOut.Close()
++		in.Close()
++		out.Close()
++		return nil, err
++	}
++	childIn.Close()
++	childOut.Close()
++	go func() { p.err = p.cmd.Wait(); close(p.done) }()
++	return p, nil
++}
++func (p *process) PID() int { return p.cmd.Process.Pid }
++func (p *process) ExitCode() int {
++	select {
++	case <-p.done:
++		if p.cmd.ProcessState != nil {
++			return p.cmd.ProcessState.ExitCode()
++		}
++	default:
++	}
++	return -1
++}
++func (p *process) groupGone() (bool, error) {
++	err := syscall.Kill(-p.PID(), 0)
++	if errors.Is(err, syscall.ESRCH) {
++		return true, nil
++	}
++	return false, err
++}
++func (p *process) waitGone(ctx context.Context, wait time.Duration) bool {
++	timer := time.NewTimer(wait)
++	defer timer.Stop()
++	tick := time.NewTicker(10 * time.Millisecond)
++	defer tick.Stop()
++	for {
++		gone, err := p.groupGone()
++		if err != nil {
++			return false
++		}
++		if gone {
++			select {
++			case <-p.done:
++				return true
++			case <-ctx.Done():
++				return false
++			}
++		}
++		select {
++		case <-ctx.Done():
++			return false
++		case <-timer.C:
++			return false
++		case <-tick.C:
++		}
++	}
++}
++
++// Stop acts only on the group this live process handle created. It never adopts
++// stored PIDs across restarts. A caller must not release its workspace on error.
++func (p *process) Stop(ctx context.Context, grace time.Duration) error {
++	p.stopMu.Lock()
++	defer p.stopMu.Unlock()
++	if p.stopped {
++		return nil
++	}
++	ctx, cancel := context.WithTimeout(ctx, 2*grace+2*time.Second)
++	defer cancel()
++	p.stdin.Close()
++	if !p.waitGone(ctx, grace) {
++		if err := syscall.Kill(-p.PID(), syscall.SIGTERM); err != nil && !errors.Is(err, syscall.ESRCH) {
++			return fmt.Errorf("%w: %v", ErrCleanupUncertain, err)
++		}
++		if !p.waitGone(ctx, grace) {
++			if err := syscall.Kill(-p.PID(), syscall.SIGKILL); err != nil && !errors.Is(err, syscall.ESRCH) {
++				return fmt.Errorf("%w: %v", ErrCleanupUncertain, err)
++			}
++			if !p.waitGone(ctx, time.Second) {
++				return ErrCleanupUncertain
++			}
++		}
++	}
++	p.stdout.Close()
++	p.stopped = true
++	return nil
++}
++func childEnvironment(profile Profile, human, active time.Duration) []string {
++	env := []string{}
++	for _, key := range []string{"PATH", "HOME", "USER", "LOGNAME", "TMPDIR", "LANG", "LC_ALL"} {
++		if value, ok := os.LookupEnv(key); ok {
++			env = append(env, key+"="+value)
++		}
++	}
++	env = append(env, "ZCODE_BUILTIN_PROVIDER_CONFIG_FILE="+profile.ProviderConfig, "ZCODE_ACP_QUESTION_TIMEOUT="+fmt.Sprint((human+time.Minute).Seconds()), "ZCODE_ACP_TURN_TIMEOUT="+fmt.Sprint(active.Seconds()))
++	if profile.BackendExecutable != "" {
++		env = append(env, "ZCODE_BIN="+profile.BackendExecutable)
++	}
++	return env
++}
++func runCheck(ctx context.Context, check Check, root string, env []string, grace time.Duration) (CheckResult, error) {
++	result := CheckResult{Executable: check.Executable, Args: check.Args}
++	directory := root
++	if check.Directory != "" && check.Directory != "." {
++		safe, err := os.OpenRoot(root)
++		if err != nil {
++			return result, err
++		}
++		sub, err := safe.OpenRoot(check.Directory)
++		safe.Close()
++		if err != nil {
++			return result, err
++		}
++		directory = sub.Name()
++		sub.Close()
++	}
++	checkCtx, cancel := context.WithTimeout(ctx, time.Duration(check.TimeoutSeconds)*time.Second)
++	defer cancel()
++	p, err := startProcess(check.Executable, check.Args, directory, env)
++	if err != nil {
++		return result, err
++	}
++	defer p.stdout.Close()
++	var output tail
++	drained := make(chan struct{})
++	go func() { io.Copy(&output, p.stdout); close(drained) }()
++	select {
++	case <-checkCtx.Done():
++		err = checkCtx.Err()
++	case <-p.done:
++	}
++	cleanup := p.Stop(context.WithoutCancel(ctx), grace)
++	if cleanup != nil {
++		return result, cleanup
++	}
++	<-drained
++	result.ExitCode = p.ExitCode()
++	result.OutputBytes, result.OutputTruncated = output.summary()
++	result.Output = output.text()
++	result.ErrorOutput = p.stderr.text()
++	result.ErrorBytes, result.ErrorTruncated = p.stderr.summary()
++	if result.ErrorBytes > 16<<10 {
++		result.ErrorTruncated = true
++	}
++	if result.OutputBytes > 16<<10 {
++		result.OutputTruncated = true
++	}
++	if err != nil {
++		return result, err
++	}
++	if result.ExitCode != check.ExpectedExitCode {
++		return result, fmt.Errorf("validation exit %d, expected %d", result.ExitCode, check.ExpectedExitCode)
++	}
++	return result, nil
++}
+diff --git a/internal/execution/spec.go b/internal/execution/spec.go
+new file mode 100644
+--- /dev/null
++++ b/internal/execution/spec.go
+@@ -0,0 +1,84 @@
++package execution
++
++import (
++	"bytes"
++	"encoding/json"
++	"errors"
++	"io"
++	"path/filepath"
++	"strings"
++	"time"
++)
++
++type Profile struct {
++	BridgeExecutable  string   `json:"bridgeExecutable"`
++	BridgeArgs        []string `json:"bridgeArgs,omitempty"`
++	BackendExecutable string   `json:"backendExecutable,omitempty"`
++	ProviderConfig    string   `json:"providerConfig"`
++	Model             string   `json:"model"`
++	Mode              string   `json:"mode"`
++}
++type Check struct {
++	Executable       string   `json:"executable"`
++	Args             []string `json:"args,omitempty"`
++	Directory        string   `json:"directory,omitempty"`
++	TimeoutSeconds   int      `json:"timeoutSeconds"`
++	ExpectedExitCode int      `json:"expectedExitCode"`
++}
++
++// Spec is persisted as the Run snapshot before execution; callers cannot replace
++// a live profile or prompt through a second set of Run() arguments.
++type Spec struct {
++	SchemaVersion int     `json:"schemaVersion"`
++	SnapshotID    string  `json:"snapshotId"`
++	Prompt        string  `json:"prompt"`
++	Profile       Profile `json:"profile"`
++	Checks        []Check `json:"checks,omitempty"`
++}
++
++func ParseSpec(raw []byte) (Spec, error) {
++	var s Spec
++	d := json.NewDecoder(bytes.NewReader(raw))
++	d.DisallowUnknownFields()
++	if err := d.Decode(&s); err != nil {
++		return s, err
++	}
++	if d.Decode(new(any)) != io.EOF {
++		return s, errors.New("expected one execution document")
++	}
++	if s.SchemaVersion != 1 || s.SnapshotID == "" || strings.TrimSpace(s.Prompt) == "" {
++		return s, errors.New("execution requires schemaVersion 1, snapshotId, and prompt")
++	}
++	if !filepath.IsAbs(s.Profile.BridgeExecutable) || !filepath.IsAbs(s.Profile.ProviderConfig) || s.Profile.Model == "" {
++		return s, errors.New("profile requires absolute executable/provider paths and explicit model")
++	}
++	if s.Profile.BackendExecutable != "" && !filepath.IsAbs(s.Profile.BackendExecutable) {
++		return s, errors.New("backend executable must be absolute")
++	}
++	switch s.Profile.Mode {
++	case "build", "plan", "edit", "yolo":
++	default:
++		return s, errors.New("profile requires an explicit known mode")
++	}
++	for _, c := range s.Checks {
++		if !filepath.IsAbs(c.Executable) || c.TimeoutSeconds < 1 || c.TimeoutSeconds > 3600 || c.ExpectedExitCode < 0 || c.ExpectedExitCode > 255 {
++			return s, errors.New("invalid validation command")
++		}
++		if c.Directory != "" && (filepath.IsAbs(c.Directory) || filepath.Clean(c.Directory) == ".." || strings.HasPrefix(filepath.Clean(c.Directory), ".."+string(filepath.Separator))) {
++			return s, errors.New("validation directory must stay inside workspace")
++		}
++	}
++	return s, nil
++}
++
++type Options struct{ Startup, Active, Human, Wall, Shutdown time.Duration }
++
++func DefaultOptions() Options {
++	return Options{Startup: time.Minute, Active: 30 * time.Minute, Human: 9 * time.Minute, Wall: 24 * time.Hour, Shutdown: 2 * time.Second}
++}
++func (o Options) validate() error {
++	if o.Startup <= 0 || o.Active <= 0 || o.Human <= 0 || o.Wall <= 0 || o.Shutdown <= 0 {
++		return errors.New("execution deadlines must be positive")
++	}
++	return nil
++}
+diff --git a/internal/execution/supervisor.go b/internal/execution/supervisor.go
+new file mode 100644
+--- /dev/null
++++ b/internal/execution/supervisor.go
+@@ -0,0 +1,415 @@
++package execution
++
++import (
++	"context"
++	"crypto/rand"
++	"encoding/hex"
++	"encoding/json"
++	"errors"
++	"fmt"
++	"sync"
++	"sync/atomic"
++	"time"
++
++	"zcode-orchestrator-go/internal/agent"
++	"zcode-orchestrator-go/internal/domain"
++	"zcode-orchestrator-go/internal/workspace"
++)
++
++var ErrActiveTimeout = errors.New("active execution budget exhausted")
++var ErrAgentCancelled = errors.New("agent cancelled the turn")
++var ErrHumanTimeout = errors.New("interaction deadline expired")
++
++type Repository interface {
++	GetRun(context.Context, string) (domain.Run, error)
++	StartAttempt(context.Context, string, int64, string, string) (domain.Run, domain.Attempt, error)
++	TransitionRun(context.Context, string, int64, domain.RunState) (domain.Run, error)
++	BeginExecution(context.Context, string, string, string) error
++	ExecutionStage(context.Context, domain.Execution) error
++	AppendAgentEvent(context.Context, string, string, []byte) error
++	FinishExecution(context.Context, string, domain.RunState, []byte) error
++	CreateInteraction(context.Context, domain.NewInteraction) (domain.Interaction, error)
++	RecordDecision(context.Context, string, int64, string, []byte) (domain.Interaction, error)
++	GetInteraction(context.Context, string) (domain.Interaction, error)
++	MarkReplyAttempted(context.Context, string, int64, string) (domain.Interaction, error)
++	ExpireInteractions(context.Context) (int, error)
++}
++type CheckResult struct {
++	ErrorBytes      int64    `json:"stderrBytes"`
++	ErrorTruncated  bool     `json:"stderrTruncated"`
++	Output          string   `json:"output,omitempty"`
++	ErrorOutput     string   `json:"stderr,omitempty"`
++	Executable      string   `json:"executable"`
++	Args            []string `json:"args,omitempty"`
++	ExitCode        int      `json:"exitCode"`
++	OutputBytes     int64    `json:"outputBytes"`
++	OutputTruncated bool     `json:"outputTruncated"`
++}
++type Result struct {
++	DispatchRecorded bool              `json:"promptDispatchRecorded"`
++	AttemptID        string            `json:"attemptId"`
++	State            domain.RunState   `json:"state"`
++	StopReason       string            `json:"stopReason"`
++	Text             string            `json:"text"`
++	TextTruncated    bool              `json:"textTruncated"`
++	Validation       string            `json:"validation"`
++	Checks           []CheckResult     `json:"checks,omitempty"`
++	Files            []workspace.Entry `json:"files,omitempty"`
++	ChangedPaths     []string          `json:"changedPaths,omitempty"`
++	ProcessStopped   bool              `json:"processStopped"`
++	Error            string            `json:"error,omitempty"`
++	StderrBytes      int64             `json:"stderrBytes"`
++	StderrTruncated  bool              `json:"stderrTruncated"`
++}
++type Supervisor struct {
++	Repo       Repository
++	Workspaces *workspace.Manager
++	NewAgent   agent.Factory
++	Options    Options
++	Answer     func(context.Context, domain.Interaction) (agent.Answer, error)
++}
++
++func newID() string {
++	var b [16]byte
++	if _, err := rand.Read(b[:]); err != nil {
++		panic(err)
++	}
++	return hex.EncodeToString(b[:])
++}
++func (s *Supervisor) transition(ctx context.Context, run string, to domain.RunState) error {
++	r, err := s.Repo.GetRun(ctx, run)
++	if err != nil {
++		return err
++	}
++	_, err = s.Repo.TransitionRun(ctx, run, r.Version, to)
++	return err
++}
++func (s *Supervisor) Run(ctx context.Context, runID string) (result Result, runErr error) {
++	if s.Repo == nil || s.Workspaces == nil || s.NewAgent == nil {
++		return result, errors.New("supervisor dependencies missing")
++	}
++	if err := s.Options.validate(); err != nil {
++		return result, err
++	}
++	run, err := s.Repo.GetRun(ctx, runID)
++	if err != nil {
++		return result, err
++	}
++	if run.State != domain.Queued {
++		return result, domain.ErrConflict
++	}
++	spec, err := ParseSpec(run.Snapshot)
++	if err != nil {
++		return result, err
++	}
++	wall, wallCancel := context.WithTimeout(ctx, s.Options.Wall)
++	defer wallCancel()
++	life, cancel := context.WithCancelCause(wall)
++	defer cancel(nil)
++	_, attempt, err := s.Repo.StartAttempt(life, runID, run.Version, "attempt-"+newID(), "connection-"+newID())
++	if err != nil {
++		return result, err
++	}
++	result.AttemptID = attempt.ID
++	lease, err := s.Workspaces.Prepare(life, "workspace-"+attempt.ID, spec.SnapshotID, attempt.ID, attempt.ConnectionID)
++	if err != nil {
++		cleanupCtx, c := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
++		defer c()
++		return result, errors.Join(err, s.transition(cleanupCtx, runID, domain.Failed))
++	}
++	defer lease.Close()
++	if err = s.Repo.BeginExecution(life, attempt.ID, lease.Workspace.ID, lease.Path); err != nil {
++		return result, err
++	}
++	var p *process
++	var client agent.Client
++	var dispatched bool
++	var budget *activeBudget
++	// All exits after the durable claim use the same outcome and teardown path.
++	defer func() {
++		if budget != nil {
++			budget.Close()
++		}
++		cleanupCtx, c := context.WithTimeout(context.WithoutCancel(ctx), 2*s.Options.Shutdown+8*time.Second)
++		defer c()
++		cause := context.Cause(life)
++		if client != nil {
++			if runErr != nil || cause != nil {
++				cancelCtx, cc := context.WithTimeout(cleanupCtx, s.Options.Shutdown)
++				_ = client.Cancel(cancelCtx)
++				cc()
++			}
++		}
++		var cleanupErr error
++		if p != nil {
++			cleanupErr = p.Stop(cleanupCtx, s.Options.Shutdown)
++			p.stdout.Close()
++			result.StderrBytes, result.StderrTruncated = p.stderr.summary()
++		}
++		if client != nil {
++			cleanupErr = errors.Join(cleanupErr, client.Close(cleanupCtx))
++		}
++		if errors.Is(runErr, ErrCleanupUncertain) {
++			cleanupErr = errors.Join(cleanupErr, ErrCleanupUncertain)
++		}
++		cause = context.Cause(life)
++		result.ProcessStopped = cleanupErr == nil
++		if cause != nil {
++			runErr = errors.Join(runErr, cause)
++		}
++		if cleanupErr != nil {
++			runErr = errors.Join(runErr, cleanupErr)
++			result.State = domain.Interrupted
++		} else if runErr != nil {
++			switch {
++			case errors.Is(cause, context.Canceled), errors.Is(runErr, ErrAgentCancelled):
++				result.State = domain.Cancelled
++			case errors.Is(cause, context.DeadlineExceeded), errors.Is(cause, ErrActiveTimeout), errors.Is(cause, ErrHumanTimeout):
++				result.State = domain.TimedOut
++			case dispatched && errors.Is(runErr, agent.ErrDisconnected):
++				result.State = domain.Interrupted
++			default:
++				result.State = domain.Failed
++			}
++		}
++		if result.ProcessStopped {
++			files, changed, e := s.Workspaces.CollectResult(cleanupCtx, lease.Workspace.ID, attempt.ID, attempt.ConnectionID)
++			if e != nil {
++				runErr = errors.Join(runErr, e)
++				result.State = domain.Failed
++			} else {
++				result.Files = files
++				result.ChangedPaths = changed
++			}
++		}
++		// An earlier interaction expiry may already have committed a terminal Run.
++		// Preserve that fact while recording uncertain cleanup and retaining its lease.
++		persistedRun, stateErr := s.Repo.GetRun(cleanupCtx, runID)
++		if stateErr != nil {
++			runErr = errors.Join(runErr, stateErr)
++		} else if persistedRun.State.Terminal() {
++			result.State = persistedRun.State
++		}
++		if runErr != nil {
++			result.Error = redact(runErr.Error())
++			if len(result.Error) > 4096 {
++				result.Error = result.Error[:4096]
++			}
++		}
++		raw, e := json.Marshal(result)
++		if e == nil {
++			e = s.Repo.FinishExecution(cleanupCtx, attempt.ID, result.State, raw)
++		}
++		if e != nil {
++			runErr = errors.Join(runErr, e)
++			return
++		}
++		if result.ProcessStopped {
++			runErr = errors.Join(runErr, lease.Release(cleanupCtx))
++		}
++	}()
++	stage := func(name string, session agent.Session) error {
++		return s.Repo.ExecutionStage(life, domain.Execution{AttemptID: attempt.ID, Stage: name, SessionID: session.ID, Model: session.Model, Mode: session.Mode, PID: func() int {
++			if p != nil {
++				return p.PID()
++			}
++			return 0
++		}()})
++	}
++	if err = stage("process_starting", agent.Session{}); err != nil {
++		return result, err
++	}
++	env := childEnvironment(spec.Profile, s.Options.Human, s.Options.Active)
++	args := append([]string{"serve"}, spec.Profile.BridgeArgs...)
++	args = append(args, "--mode", "build")
++	p, err = startProcess(spec.Profile.BridgeExecutable, args, lease.Path, env)
++	if err != nil {
++		return result, err
++	}
++	if err = stage("process_started", agent.Session{}); err != nil {
++		return result, err
++	}
++	budget = newActiveBudget(s.Options.Active, func() { cancel(ErrActiveTimeout) })
++	budget.Pause()
++	var interactionSeq atomic.Uint64
++	hooks := agent.Hooks{
++		Fail: cancel,
++		Event: func(c context.Context, e agent.Event) error {
++			return s.Repo.AppendAgentEvent(c, attempt.ID, e.Kind, e.Payload)
++		},
++		Interaction: func(c context.Context, request agent.Interaction) (agent.Answer, error) {
++			if budget != nil {
++				budget.Pause()
++				defer budget.Resume()
++			}
++			expires := time.Now().Add(s.Options.Human)
++			var metadata struct {
++				Meta struct {
++					Zcode struct {
++						Expires string `json:"expiresAt"`
++					} `json:"_zcode"`
++				} `json:"_meta"`
++			}
++			if json.Unmarshal(request.Request, &metadata) != nil {
++				return agent.Answer{}, errors.New("invalid interaction metadata")
++			}
++			if metadata.Meta.Zcode.Expires != "" {
++				outer, e := time.Parse(time.RFC3339Nano, metadata.Meta.Zcode.Expires)
++				if e != nil {
++					return agent.Answer{}, e
++				}
++				if outer.Before(expires) {
++					expires = outer
++				}
++			}
++			human, cc := context.WithDeadline(c, expires)
++			defer cc()
++			id := fmt.Sprintf("%s-%d", attempt.ConnectionID, interactionSeq.Add(1))
++			interaction, e := s.Repo.CreateInteraction(human, domain.NewInteraction{ID: id, AttemptID: attempt.ID, ConnectionID: attempt.ConnectionID, RequestKey: id, Kind: request.Kind, Request: request.Request, ExpiresAt: expires})
++			if e != nil {
++				return agent.Answer{}, e
++			}
++			var answer agent.Answer
++			if s.Answer == nil {
++				<-human.Done()
++				e = human.Err()
++			} else {
++				answer, e = s.Answer(human, interaction)
++			}
++			if human.Err() != nil {
++				e = human.Err()
++			}
++			if errors.Is(e, context.DeadlineExceeded) {
++				expiryCtx, ec := context.WithTimeout(context.WithoutCancel(c), time.Second)
++				_, expireErr := s.Repo.ExpireInteractions(expiryCtx)
++				ec()
++				return answer, errors.Join(ErrHumanTimeout, expireErr)
++			}
++			if e != nil {
++				return answer, e
++			}
++			raw, e := json.Marshal(answer)
++			if e != nil {
++				return answer, e
++			}
++			if _, e = s.Repo.RecordDecision(human, id, interaction.Version, attempt.ConnectionID, raw); e != nil {
++				return answer, e
++			}
++			answer.InteractionID = id
++			return answer, nil
++		},
++		Reply: func(c context.Context, id string) error {
++			i, e := s.Repo.GetInteraction(c, id)
++			if e != nil {
++				return e
++			}
++			_, e = s.Repo.MarkReplyAttempted(c, id, i.Version, attempt.ConnectionID)
++			return e
++		},
++	}
++	client = s.NewAgent(life, p.stdin, p.stdout, hooks)
++	startup, sc := context.WithTimeout(life, s.Options.Startup)
++	session, err := client.Prepare(startup, lease.Path, spec.Profile.Model, spec.Profile.Mode)
++	sc()
++	if err != nil {
++		return result, err
++	}
++	if err = stage("session_ready", session); err != nil {
++		return result, err
++	}
++	if err = s.transition(life, runID, domain.Running); err != nil {
++		return result, err
++	}
++	budget.Resume()
++	if err = stage("prompt_dispatching", session); err != nil {
++		return result, err
++	}
++	dispatched = true
++	result.DispatchRecorded = true
++	response, err := client.Prompt(life, spec.Prompt)
++	result.StopReason = response.StopReason
++	result.Text = response.Text
++	result.TextTruncated = response.TextTruncated
++	if err != nil {
++		return result, err
++	}
++	if response.StopReason == "cancelled" {
++		return result, ErrAgentCancelled
++	}
++	if response.StopReason != "end_turn" {
++		return result, fmt.Errorf("agent stopped with %s", response.StopReason)
++	}
++	if err = stage("prompt_finished", session); err != nil {
++		return result, err
++	}
++	if err = s.transition(life, runID, domain.Verifying); err != nil {
++		return result, err
++	}
++	if err = stage("verifying", session); err != nil {
++		return result, err
++	}
++	// Ensure the model cannot keep changing files while validation is running.
++	if err = p.Stop(life, s.Options.Shutdown); err != nil {
++		return result, err
++	}
++	if err = client.Close(life); err != nil {
++		return result, err
++	}
++	result.Validation = "not_configured"
++	for _, check := range spec.Checks {
++		checked, e := runCheck(life, check, lease.Path, env, s.Options.Shutdown)
++		result.Checks = append(result.Checks, checked)
++		if e != nil {
++			result.Validation = "failed"
++			return result, e
++		}
++		result.Validation = "passed"
++	}
++	result.State = domain.Succeeded
++	return result, nil
++}
++
++type activeBudget struct {
++	mu        sync.Mutex
++	remaining time.Duration
++	started   time.Time
++	waiters   int
++	timer     *time.Timer
++	closed    bool
++	expire    func()
++}
++
++func newActiveBudget(d time.Duration, expire func()) *activeBudget {
++	b := &activeBudget{remaining: d, started: time.Now(), expire: expire}
++	b.timer = time.AfterFunc(d, expire)
++	return b
++}
++func (b *activeBudget) Pause() {
++	b.mu.Lock()
++	defer b.mu.Unlock()
++	if b.closed {
++		return
++	}
++	if b.waiters == 0 {
++		b.timer.Stop()
++		b.remaining -= time.Since(b.started)
++	}
++	b.waiters++
++}
++func (b *activeBudget) Resume() {
++	b.mu.Lock()
++	defer b.mu.Unlock()
++	if b.closed {
++		return
++	}
++	b.waiters--
++	if b.waiters == 0 {
++		b.started = time.Now()
++		if b.remaining <= 0 {
++			b.expire()
++		} else {
++			b.timer.Reset(b.remaining)
++		}
++	}
++}
++func (b *activeBudget) Close() { b.mu.Lock(); defer b.mu.Unlock(); b.closed = true; b.timer.Stop() }
+diff --git a/internal/store/sqlite/execution.go b/internal/store/sqlite/execution.go
+new file mode 100644
+--- /dev/null
++++ b/internal/store/sqlite/execution.go
+@@ -0,0 +1,120 @@
++package sqlite
++
++import (
++	"context"
++	"database/sql"
++	"strings"
++	"time"
++
++	"zcode-orchestrator-go/internal/domain"
++)
++
++func (s *Store) BeginExecution(ctx context.Context, attempt, workspace, cwd string) error {
++	return s.write(ctx, func(tx *sql.Tx) error {
++		var state domain.RunState
++		var held bool
++		var ready string
++		if err := tx.QueryRowContext(ctx, `SELECT a.state,w.held,w.state FROM attempts a JOIN workspaces w ON w.attempt_id=a.id WHERE a.id=? AND w.id=?`, attempt, workspace).Scan(&state, &held, &ready); err != nil {
++			return err
++		}
++		if state != domain.Preparing || !held || ready != "ready" {
++			return domain.ErrConflict
++		}
++		if _, err := tx.ExecContext(ctx, `INSERT INTO executions(attempt_id,workspace_id,stage,cwd) VALUES(?,?,'claimed',?)`, attempt, workspace, cwd); err != nil {
++			return err
++		}
++		return event(ctx, tx, "execution.claimed", attempt, map[string]any{"workspaceId": workspace}, time.Now().UTC())
++	})
++}
++
++var stages = map[string]string{"process_starting": "claimed", "process_started": "process_starting", "session_ready": "process_started", "prompt_dispatching": "session_ready", "prompt_finished": "prompt_dispatching", "verifying": "prompt_finished"}
++
++func (s *Store) ExecutionStage(ctx context.Context, e domain.Execution) error {
++	before, ok := stages[e.Stage]
++	if !ok {
++		return domain.ErrInvalid
++	}
++	return s.write(ctx, func(tx *sql.Tx) error {
++		var state domain.RunState
++		if err := tx.QueryRowContext(ctx, `SELECT state FROM attempts WHERE id=?`, e.AttemptID).Scan(&state); err != nil {
++			return err
++		}
++		if state.Terminal() || state == domain.Cancelling {
++			return domain.ErrConflict
++		}
++		result, err := tx.ExecContext(ctx, `UPDATE executions SET stage=?,pid=CASE WHEN ?>0 THEN ? ELSE pid END,session_id=CASE WHEN ?!='' THEN ? ELSE session_id END,model=CASE WHEN ?!='' THEN ? ELSE model END,mode=CASE WHEN ?!='' THEN ? ELSE mode END WHERE attempt_id=? AND stage=?`, e.Stage, e.PID, e.PID, e.SessionID, e.SessionID, e.Model, e.Model, e.Mode, e.Mode, e.AttemptID, before)
++		if err != nil {
++			return err
++		}
++		if err = oneRow(result); err != nil {
++			return err
++		}
++		return event(ctx, tx, "execution."+e.Stage, e.AttemptID, map[string]any{"pid": e.PID, "sessionId": e.SessionID, "model": e.Model, "mode": e.Mode}, time.Now().UTC())
++	})
++}
++func (s *Store) AppendAgentEvent(ctx context.Context, attempt, kind string, payload []byte) error {
++	if !strings.HasPrefix(kind, "agent.") || domain.CheckObject(payload) != nil {
++		return domain.ErrInvalid
++	}
++	return s.write(ctx, func(tx *sql.Tx) error {
++		var state domain.RunState
++		if err := tx.QueryRowContext(ctx, `SELECT state FROM attempts WHERE id=?`, attempt).Scan(&state); err != nil {
++			return err
++		}
++		if state.Terminal() {
++			return domain.ErrConflict
++		}
++		_, err := tx.ExecContext(ctx, `INSERT INTO events(kind,entity_id,schema_version,payload,created_at) VALUES(?,?,1,?,?)`, kind, attempt, string(payload), time.Now().UTC().UnixNano())
++		return err
++	})
++}
++func (s *Store) FinishExecution(ctx context.Context, attempt string, to domain.RunState, outcome []byte) error {
++	if !to.Terminal() || domain.CheckObject(outcome) != nil {
++		return domain.ErrInvalid
++	}
++	return s.write(ctx, func(tx *sql.Tx) error {
++		var runID, workspace string
++		if err := tx.QueryRowContext(ctx, `SELECT a.run_id,e.workspace_id FROM attempts a JOIN executions e ON e.attempt_id=a.id WHERE a.id=?`, attempt).Scan(&runID, &workspace); err != nil {
++			return err
++		}
++		r, err := scanRun(tx.QueryRowContext(ctx, "SELECT "+runColumns+" FROM runs WHERE id=?", runID))
++		if err != nil {
++			return err
++		}
++		if r.State.Terminal() && r.State != to {
++			return domain.ErrConflict
++		}
++		now := time.Now().UTC()
++		if to == domain.Cancelled && r.State != domain.Cancelling {
++			r, err = updateRun(ctx, tx, r, domain.Cancelling, now, true)
++			if err != nil {
++				return err
++			}
++		}
++		if !r.State.Terminal() {
++			if _, err = updateRun(ctx, tx, r, to, now, true); err != nil {
++				return err
++			}
++		}
++		res, err := tx.ExecContext(ctx, `UPDATE executions SET stage='finished',outcome=? WHERE attempt_id=? AND stage!='finished'`, string(outcome), attempt)
++		if err != nil {
++			return err
++		}
++		if err = oneRow(res); err != nil {
++			return err
++		}
++		if _, err = tx.ExecContext(ctx, `INSERT OR IGNORE INTO workspace_references(workspace_id,reference_id) VALUES(?,?)`, workspace, "execution:"+attempt); err != nil {
++			return err
++		}
++		return event(ctx, tx, "execution.finished", attempt, map[string]any{"state": to, "resultReference": "execution:" + attempt}, now)
++	})
++}
++func (s *Store) GetExecution(ctx context.Context, attempt string) (domain.Execution, error) {
++	var e domain.Execution
++	var outcome sql.NullString
++	err := s.db.QueryRowContext(ctx, `SELECT attempt_id,workspace_id,stage,pid,session_id,cwd,model,mode,outcome FROM executions WHERE attempt_id=?`, attempt).Scan(&e.AttemptID, &e.WorkspaceID, &e.Stage, &e.PID, &e.SessionID, &e.Cwd, &e.Model, &e.Mode, &outcome)
++	if outcome.Valid {
++		e.Outcome = []byte(outcome.String)
++	}
++	return e, classify(err)
++}
+diff --git a/internal/store/sqlite/execution_test.go b/internal/store/sqlite/execution_test.go
+new file mode 100644
+--- /dev/null
++++ b/internal/store/sqlite/execution_test.go
+@@ -0,0 +1,105 @@
++package sqlite
++
++import (
++	"context"
++	"errors"
++	"testing"
++
++	"zcode-orchestrator-go/internal/domain"
++)
++
++func executionFixture(t *testing.T) (*Store, domain.Run, domain.Attempt) {
++	t.Helper()
++	s := testStore(t)
++	ctx := context.Background()
++	r := testRun(t, s, "execution-run")
++	r, a, err := s.StartAttempt(ctx, r.ID, r.Version, "execution-attempt", "execution-epoch")
++	if err != nil {
++		t.Fatal(err)
++	}
++	if err = s.RegisterProject(ctx, domain.Project{ID: "p", Root: "/project", Kind: "directory"}); err != nil {
++		t.Fatal(err)
++	}
++	if err = s.ReserveSnapshot(ctx, "snapshot", "p", ""); err != nil {
++		t.Fatal(err)
++	}
++	if err = s.FinishSnapshot(ctx, "snapshot", "", []byte(`{}`), true); err != nil {
++		t.Fatal(err)
++	}
++	if err = s.ReserveWorkspace(ctx, domain.Workspace{ID: "workspace", SnapshotID: "snapshot", AttemptID: a.ID, ConnectionID: a.ConnectionID}); err != nil {
++		t.Fatal(err)
++	}
++	if err = s.FinishWorkspace(ctx, "workspace", true); err != nil {
++		t.Fatal(err)
++	}
++	if err = s.BeginExecution(ctx, a.ID, "workspace", "/managed/tree"); err != nil {
++		t.Fatal(err)
++	}
++	for _, stage := range []string{"process_starting", "process_started", "session_ready"} {
++		if err = s.ExecutionStage(ctx, domain.Execution{AttemptID: a.ID, Stage: stage, PID: 123, SessionID: "session", Model: "p/model", Mode: "build"}); err != nil {
++			t.Fatal(err)
++		}
++	}
++	r, err = s.TransitionRun(ctx, r.ID, r.Version, domain.Running)
++	if err != nil {
++		t.Fatal(err)
++	}
++	return s, r, a
++}
++func TestDispatchAndResultAreDurable(t *testing.T) {
++	s, r, a := executionFixture(t)
++	ctx := context.Background()
++	if err := s.ExecutionStage(ctx, domain.Execution{AttemptID: a.ID, Stage: "prompt_dispatching"}); err != nil {
++		t.Fatal(err)
++	}
++	if err := s.AppendAgentEvent(ctx, a.ID, "agent.message", []byte(`{"text":"done"}`)); err != nil {
++		t.Fatal(err)
++	}
++	if err := s.ExecutionStage(ctx, domain.Execution{AttemptID: a.ID, Stage: "prompt_finished"}); err != nil {
++		t.Fatal(err)
++	}
++	if _, err := s.TransitionRun(ctx, r.ID, r.Version, domain.Verifying); err != nil {
++		t.Fatal(err)
++	}
++	if err := s.ExecutionStage(ctx, domain.Execution{AttemptID: a.ID, Stage: "verifying"}); err != nil {
++		t.Fatal(err)
++	}
++	if err := s.FinishExecution(ctx, a.ID, domain.Succeeded, []byte(`{"validation":"not_configured"}`)); err != nil {
++		t.Fatal(err)
++	}
++	if err := s.ReleaseWorkspace(ctx, "workspace", a.ID, a.ConnectionID); err != nil {
++		t.Fatal(err)
++	}
++	if err := s.CheckWorkspaceCleanup(ctx, "workspace"); !errors.Is(err, domain.ErrConflict) {
++		t.Fatalf("result workspace was not pinned: %v", err)
++	}
++	e, err := s.GetExecution(ctx, a.ID)
++	if err != nil || e.Stage != "finished" || len(e.Outcome) == 0 {
++		t.Fatalf("result: %+v %v", e, err)
++	}
++	if err = s.AppendAgentEvent(ctx, a.ID, "agent.message", []byte(`{}`)); !errors.Is(err, domain.ErrConflict) {
++		t.Fatalf("late event changed terminal attempt: %v", err)
++	}
++	if err = s.FinishExecution(ctx, a.ID, domain.Failed, []byte(`{}`)); !errors.Is(err, domain.ErrConflict) {
++		t.Fatalf("terminal result overwritten: %v", err)
++	}
++}
++func TestDispatchRecordFailureDoesNotAdvance(t *testing.T) {
++	s, _, a := executionFixture(t)
++	ctx := context.Background()
++	before, _ := s.Events(ctx, 0, 100)
++	if _, err := s.db.Exec(`CREATE TRIGGER refuse_dispatch BEFORE INSERT ON events WHEN NEW.kind='execution.prompt_dispatching' BEGIN SELECT RAISE(ABORT,'injected'); END`); err != nil {
++		t.Fatal(err)
++	}
++	if err := s.ExecutionStage(ctx, domain.Execution{AttemptID: a.ID, Stage: "prompt_dispatching"}); err == nil {
++		t.Fatal("dispatch persistence error ignored")
++	}
++	e, err := s.GetExecution(ctx, a.ID)
++	if err != nil || e.Stage != "session_ready" {
++		t.Fatalf("partial dispatch state: %+v %v", e, err)
++	}
++	after, _ := s.Events(ctx, 0, 100)
++	if len(after) != len(before) {
++		t.Fatal("dispatch event escaped rollback")
++	}
++}
+diff --git a/internal/store/sqlite/migrations/003_execution.sql b/internal/store/sqlite/migrations/003_execution.sql
+new file mode 100644
+--- /dev/null
++++ b/internal/store/sqlite/migrations/003_execution.sql
+@@ -0,0 +1,11 @@
++CREATE TABLE executions (
++ attempt_id TEXT PRIMARY KEY NOT NULL REFERENCES attempts(id),
++ workspace_id TEXT NOT NULL UNIQUE REFERENCES workspaces(id),
++ stage TEXT NOT NULL CHECK(stage IN ('claimed','process_starting','process_started','session_ready','prompt_dispatching','prompt_finished','verifying','finished')),
++ pid INTEGER NOT NULL DEFAULT 0,
++ session_id TEXT NOT NULL DEFAULT '',
++ cwd TEXT NOT NULL,
++ model TEXT NOT NULL DEFAULT '',
++ mode TEXT NOT NULL DEFAULT '',
++ outcome TEXT CHECK(outcome IS NULL OR json_valid(outcome))
++);
+diff --git a/internal/store/sqlite/workspaces_test.go b/internal/store/sqlite/workspaces_test.go
+--- a/internal/store/sqlite/workspaces_test.go
++++ b/internal/store/sqlite/workspaces_test.go
+@@ -48,7 +48,7 @@
+ 		t.Fatal(err)
+ 	}
+ 	var count int
+-	if err = current.db.QueryRow(`SELECT COUNT(*) FROM schema_migrations`).Scan(&count); err != nil || count != 2 {
++	if err = current.db.QueryRow(`SELECT COUNT(*) FROM schema_migrations`).Scan(&count); err != nil || count != 3 {
+ 		t.Fatalf("migration count: %d %v", count, err)
+ 	}
+ }
+diff --git a/internal/workspace/manager.go b/internal/workspace/manager.go
+--- a/internal/workspace/manager.go
++++ b/internal/workspace/manager.go
+@@ -800,3 +800,49 @@
+ 	}
+ 	return m.repo.FinishSnapshotRemoval(ctx, id)
+ }
++
++// CollectResult reads the stopped owner's tree without releasing its lease. The
++// caller must keep ownership until its outcome and reference are persisted.
++func (m *Manager) CollectResult(ctx context.Context, id, attempt, epoch string) ([]Entry, []string, error) {
++	w, err := m.repo.GetWorkspace(ctx, id)
++	if err != nil {
++		return nil, nil, err
++	}
++	if !w.Held || w.State != "ready" || w.AttemptID != attempt || w.ConnectionID != epoch {
++		return nil, nil, domain.ErrConflict
++	}
++	if _, err = m.checkOwner(w); err != nil {
++		return nil, nil, err
++	}
++	tree, err := m.openManaged(workspaceDir(id) + "/tree")
++	if err != nil {
++		return nil, nil, err
++	}
++	defer tree.Close()
++	p := m.policy
++	p.Exclude = nil
++	files, _, err := scan(ctx, tree.Name(), nil, p, nil)
++	if err != nil {
++		return nil, nil, err
++	}
++	baseline, err := m.SnapshotManifest(ctx, w.SnapshotID)
++	if err != nil {
++		return nil, nil, err
++	}
++	old := map[string]Entry{}
++	for _, e := range baseline.Files {
++		old[e.Path] = e
++	}
++	changed := []string{}
++	for _, e := range files {
++		if prior, ok := old[e.Path]; !ok || prior != e {
++			changed = append(changed, e.Path)
++		}
++		delete(old, e.Path)
++	}
++	for path := range old {
++		changed = append(changed, path)
++	}
++	sort.Strings(changed)
++	return files, changed, nil
++}
+diff --git a/test/contract/execution_test.go b/test/contract/execution_test.go
+new file mode 100644
+--- /dev/null
++++ b/test/contract/execution_test.go
+@@ -0,0 +1,218 @@
++//go:build contract
++
++package contract
++
++import (
++	"context"
++	"encoding/json"
++	"fmt"
++	"os"
++	"os/exec"
++	"path/filepath"
++	"strings"
++	"testing"
++	"time"
++
++	"zcode-orchestrator-go/internal/agent"
++	"zcode-orchestrator-go/internal/app"
++	"zcode-orchestrator-go/internal/config"
++	"zcode-orchestrator-go/internal/domain"
++	"zcode-orchestrator-go/internal/execution"
++	"zcode-orchestrator-go/internal/workspace"
++)
++
++var bridge, fake string
++
++func TestMain(m *testing.M) {
++	dir, err := os.MkdirTemp("", "zorch-execution-contract-")
++	if err != nil {
++		panic(err)
++	}
++	bridgeSource := os.Getenv("ZORCH_TEST_BRIDGE_DIR")
++	if bridgeSource == "" {
++		bridgeSource = "../../../zcode-open-bridge-go"
++	}
++	bridgeSource, err = filepath.Abs(bridgeSource)
++	if err != nil {
++		panic(err)
++	}
++	bridge = filepath.Join(dir, "bridge")
++	fake = filepath.Join(dir, "fake-zcode")
++	for _, build := range []struct{ cwd, out, target string }{{bridgeSource, bridge, "./cmd/zcode-acp-bridge"}, {"../..", fake, "./test/fixture/zcode"}} {
++		cmd := exec.Command("go", "build", "-buildvcs=false", "-o", build.out, build.target)
++		cmd.Dir = build.cwd
++		if raw, err := cmd.CombinedOutput(); err != nil {
++			fmt.Fprintf(os.Stderr, "build contract fixture: %v\n%s", err, raw)
++			os.RemoveAll(dir)
++			os.Exit(1)
++		}
++	}
++	code := m.Run()
++	os.RemoveAll(dir)
++	os.Exit(code)
++}
++func quote(s string) string { return "'" + strings.ReplaceAll(s, "'", "'\\''") + "'" }
++func setup(t *testing.T, scenario string, checks []execution.Check) (*app.Runtime, string, string) {
++	t.Helper()
++	ctx := context.Background()
++	base := t.TempDir()
++	cfg, err := config.Defaults()
++	if err != nil {
++		t.Fatal(err)
++	}
++	cfg.DataDir = filepath.Join(base, "data")
++	runtime, err := app.Open(ctx, cfg)
++	if err != nil {
++		t.Fatal(err)
++	}
++	t.Cleanup(func() { runtime.Close() })
++	source := filepath.Join(base, "source")
++	if err = os.Mkdir(source, 0700); err != nil {
++		t.Fatal(err)
++	}
++	if err = os.WriteFile(filepath.Join(source, "initial.txt"), []byte("keep"), 0600); err != nil {
++		t.Fatal(err)
++	}
++	if _, err = runtime.Workspaces.RegisterProject(ctx, "project", source); err != nil {
++		t.Fatal(err)
++	}
++	snap, err := runtime.Workspaces.Capture(ctx, workspace.CaptureRequest{ID: "snapshot", ProjectID: "project"})
++	if err != nil {
++		t.Fatal(err)
++	}
++	log := filepath.Join(base, "requests.jsonl")
++	wrapper := filepath.Join(base, "backend")
++	provider := filepath.Join(base, "provider.json")
++	script := "#!/bin/sh\nexport O04_SCENARIO=" + quote(scenario) + "\nexport O04_LOG=" + quote(log) + "\nexec " + quote(fake) + " \"$@\"\n"
++	if err = os.WriteFile(wrapper, []byte(script), 0700); err != nil {
++		t.Fatal(err)
++	}
++	if err = os.WriteFile(provider, []byte(`{"providers":{}}`), 0600); err != nil {
++		t.Fatal(err)
++	}
++	spec := execution.Spec{SchemaVersion: 1, SnapshotID: snap.ID, Prompt: "write result.txt", Profile: execution.Profile{BridgeExecutable: bridge, BackendExecutable: wrapper, ProviderConfig: provider, Model: "p/model", Mode: "build"}, Checks: checks}
++	raw, _ := json.Marshal(spec)
++	if _, err = runtime.Store.CreateRun(ctx, domain.NewRun{ID: "run", TaskVersionID: "version", Snapshot: raw}); err != nil {
++		t.Fatal(err)
++	}
++	runtime.Executor.Options = execution.Options{Startup: 5 * time.Second, Active: 5 * time.Second, Human: time.Second, Wall: 15 * time.Second, Shutdown: execution.DefaultOptions().Shutdown}
++	return runtime, log, source
++}
++func TestCompletionAndValidation(t *testing.T) {
++	runtime, _, source := setup(t, "ok", []execution.Check{{Executable: "/bin/sh", Args: []string{"-c", "test \"$(cat result.txt)\" = done"}, TimeoutSeconds: 2}})
++	result, err := runtime.Executor.Run(context.Background(), "run")
++	if err != nil {
++		t.Fatalf("run: %v; result=%+v", err, result)
++	}
++	if result.State != domain.Succeeded || result.Validation != "passed" || !result.ProcessStopped || result.Text != "Task complete" {
++		t.Fatalf("incomplete outcome: %+v", result)
++	}
++	if _, err = os.Stat(filepath.Join(source, "result.txt")); !os.IsNotExist(err) {
++		t.Fatal("original project was modified")
++	}
++	record, err := runtime.Store.GetExecution(context.Background(), result.AttemptID)
++	if err != nil || record.Stage != "finished" || record.SessionID != "fixture-session" {
++		t.Fatalf("execution record: %+v %v", record, err)
++	}
++	var persisted execution.Result
++	if err = json.Unmarshal(record.Outcome, &persisted); err != nil {
++		t.Fatal(err)
++	}
++	if len(persisted.ChangedPaths) != 1 || persisted.ChangedPaths[0] != "result.txt" {
++		t.Fatalf("missing file result: %+v", persisted)
++	}
++	events, err := runtime.Store.Events(context.Background(), 0, 100)
++	if err != nil {
++		t.Fatal(err)
++	}
++	var dispatch, message int64
++	for _, e := range events {
++		if e.Kind == "execution.prompt_dispatching" {
++			dispatch = e.Sequence
++		}
++		if e.Kind == "agent.message" {
++			message = e.Sequence
++		}
++	}
++	if dispatch == 0 || message <= dispatch {
++		t.Fatalf("dispatch was not durably recorded before output: %d %d", dispatch, message)
++	}
++}
++func TestModelFailureDoesNotPrompt(t *testing.T) {
++	for _, scenario := range []string{"model_error", "model_mismatch"} {
++		t.Run(scenario, func(t *testing.T) {
++			runtime, log, _ := setup(t, scenario, nil)
++			_, err := runtime.Executor.Run(context.Background(), "run")
++			if err == nil {
++				t.Fatal("model failure became success")
++			}
++			raw, err := os.ReadFile(log)
++			if err != nil {
++				t.Fatal(err)
++			}
++			if strings.Contains(string(raw), `"method":"session/send"`) {
++				t.Fatal("prompt sent before model confirmation")
++			}
++		})
++	}
++}
++func TestExplicitPermissionAndForm(t *testing.T) {
++	for _, scenario := range []string{"permission", "form"} {
++		t.Run(scenario, func(t *testing.T) {
++			runtime, _, _ := setup(t, scenario, nil)
++			runtime.Executor.Answer = func(ctx context.Context, i domain.Interaction) (agent.Answer, error) {
++				if i.Kind == "permission" {
++					return agent.Answer{Action: "accept", OptionID: "allow_once"}, nil
++				}
++				return agent.Answer{Action: "accept", Content: map[string]any{"Approve plan?": "approve"}}, nil
++			}
++			result, err := runtime.Executor.Run(context.Background(), "run")
++			if err != nil {
++				t.Fatalf("explicit answer: %v (%+v)", err, result)
++			}
++			if result.State != domain.Succeeded || result.Validation != "not_configured" {
++				t.Fatalf("unexpected outcome %+v", result)
++			}
++		})
++	}
++}
++func TestDefaultInteractionWaitsAndExpires(t *testing.T) {
++	runtime, _, _ := setup(t, "permission", nil)
++	runtime.Executor.Options.Human = 100 * time.Millisecond
++	result, err := runtime.Executor.Run(context.Background(), "run")
++	if err == nil {
++		t.Fatal("unanswered permission succeeded")
++	}
++	if result.State != domain.TimedOut || !result.ProcessStopped {
++		t.Fatalf("expired request did not stop: %+v %v", result, err)
++	}
++}
++func TestCancelActiveRun(t *testing.T) {
++	runtime, log, _ := setup(t, "wait", nil)
++	ctx, cancel := context.WithCancel(context.Background())
++	defer cancel()
++	go func() {
++		deadline := time.Now().Add(5 * time.Second)
++		for time.Now().Before(deadline) {
++			raw, _ := os.ReadFile(log)
++			if strings.Contains(string(raw), `"method":"session/send"`) {
++				cancel()
++				return
++			}
++			time.Sleep(10 * time.Millisecond)
++		}
++		cancel()
++	}()
++	result, err := runtime.Executor.Run(ctx, "run")
++	if err == nil || result.State != domain.Cancelled || !result.ProcessStopped {
++		t.Fatalf("cancel: %+v %v", result, err)
++	}
++}
++
++func TestFailedValidationIsNotSuccess(t *testing.T) {
++	runtime, _, _ := setup(t, "no_file", []execution.Check{{Executable: "/bin/sh", Args: []string{"-c", "test -f result.txt"}, TimeoutSeconds: 2}})
++	result, err := runtime.Executor.Run(context.Background(), "run")
++	if err == nil || result.State != domain.Failed || result.Validation != "failed" || !result.ProcessStopped {
++		t.Fatalf("false validation success: %+v %v", result, err)
++	}
++}
+diff --git a/test/fixture/zcode/main.go b/test/fixture/zcode/main.go
+new file mode 100644
+--- /dev/null
++++ b/test/fixture/zcode/main.go
+@@ -0,0 +1,107 @@
++// This deterministic ZCode fixture performs file effects only after session/send.
++package main
++
++import (
++	"bufio"
++	"encoding/json"
++	"fmt"
++	"os"
++	"strings"
++)
++
++func main() {
++	for _, a := range os.Args[1:] {
++		if a == "--version" {
++			fmt.Println("0.16.9")
++			return
++		}
++	}
++	scenario := os.Getenv("O04_SCENARIO")
++	logPath := os.Getenv("O04_LOG")
++	log, _ := os.OpenFile(logPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0600)
++	if log != nil {
++		defer log.Close()
++	}
++	send := func(v any) { raw, _ := json.Marshal(v); fmt.Println(string(raw)) }
++	settings := func(model string) map[string]any {
++		return map[string]any{"mode": map[string]any{"current": "build"}, "model": map[string]any{"current": map[string]any{"providerId": "p", "modelId": model}, "available": []any{map[string]any{"ref": map[string]any{"providerId": "p", "modelId": "model"}, "label": "Model"}, map[string]any{"ref": map[string]any{"providerId": "p", "modelId": "other"}, "label": "Other"}}}}
++	}
++	emit := func(kind string, payload map[string]any) {
++		send(map[string]any{"method": "session/event", "params": map[string]any{"sessionId": "fixture-session", "type": kind, "payload": payload}})
++	}
++	complete := func() {
++		if scenario != "no_file" {
++			if err := os.WriteFile("result.txt", []byte("done"), 0600); err != nil {
++				panic(err)
++			}
++		}
++		emit("model.streaming", map[string]any{"kind": "text_delta", "delta": "Task complete"})
++		emit("turn.completed", map[string]any{"resultType": "success"})
++	}
++	in := bufio.NewScanner(os.Stdin)
++	in.Buffer(make([]byte, 4096), 2<<20)
++	for in.Scan() {
++		var msg struct {
++			Result map[string]any  `json:"result"`
++			ID     json.RawMessage `json:"id"`
++			Method string          `json:"method"`
++			Params map[string]any  `json:"params"`
++		}
++		if json.Unmarshal(in.Bytes(), &msg) != nil {
++			continue
++		}
++		if log != nil {
++			log.Write(append(append([]byte(nil), in.Bytes()...), '\n'))
++			log.Sync()
++		}
++		if msg.Method == "" {
++			if strings.Contains(string(msg.ID), "permission") || strings.Contains(string(msg.ID), "question") {
++				if msg.Result["decision"] == "allow" || msg.Result["action"] == "accept" {
++					complete()
++				} else {
++					emit("turn.completed", map[string]any{"resultType": "cancelled"})
++				}
++			}
++			continue
++		}
++		reply := func(result any) { send(map[string]any{"id": msg.ID, "result": result}) }
++		switch msg.Method {
++		case "workspace/readState":
++			send(map[string]any{"id": "invalid-message", "error": map[string]any{"code": -32600, "message": "invalid_union"}})
++		case "session/create":
++			reply(map[string]any{"session": map[string]any{"sessionId": "fixture-session"}, "settings": settings("model")})
++		case "session/setMode", "session/subscribe":
++			reply(map[string]any{})
++		case "session/setModel":
++			if scenario == "model_error" {
++				send(map[string]any{"id": msg.ID, "error": map[string]any{"code": -32000, "message": "model unavailable"}})
++			} else {
++				model := "model"
++				if scenario == "model_mismatch" {
++					model = "other"
++				}
++				reply(map[string]any{"settings": settings(model)})
++			}
++		case "session/messages":
++			reply(map[string]any{"messages": []any{}})
++		case "session/send":
++			reply(map[string]any{"accepted": true})
++			switch scenario {
++			case "wait":
++			case "backend_exit":
++				os.Exit(17)
++			case "permission":
++				send(map[string]any{"id": "permission-1", "method": "interaction/requestPermission", "params": map[string]any{"sessionId": "fixture-session", "requestId": "permission", "toolCallId": "tool", "toolName": "Write", "options": []any{map[string]any{"optionId": "allow_once", "kind": "allow_once", "name": "Allow once", "response": map[string]any{"decision": "allow"}}}}})
++			case "form":
++				send(map[string]any{"id": "question-1", "method": "interaction/requestUserInput", "params": map[string]any{"sessionId": "fixture-session", "questions": []any{map[string]any{"question": "Approve plan?", "options": []any{map[string]any{"label": "Approve", "value": "approve"}}}}}})
++			default:
++				complete()
++			}
++		case "session/stop":
++			reply(map[string]any{})
++			emit("turn.completed", map[string]any{"resultType": "cancelled"})
++		default:
++			reply(map[string]any{})
++		}
++	}
++}

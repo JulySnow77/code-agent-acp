@@ -1,0 +1,160 @@
+{
+  "eventSeq": 0,
+  "events": [],
+  "sessionId": "sess_16bf3a5a-2943-485e-af01-8b4a2619277b",
+  "snapshot": {
+    "messages": [],
+    "projection": {
+      "activeToolCalls": [],
+      "backgroundJobs": [],
+      "contextUsed": 0,
+      "contextWindow": 200000,
+      "mode": "build",
+      "pendingPermissions": [],
+      "sessionId": "unknown",
+      "status": "idle",
+      "target": null,
+      "totalTokenCount": 0,
+      "turnCount": 0
+    },
+    "protocol": {
+      "name": "ZCode Protocol",
+      "version": 1
+    },
+    "runtime": {
+      "deliveryKind": "desktop-continuous",
+      "eventSeq": 0,
+      "goalVerificationTimeline": [],
+      "goalVerifications": [],
+      "pendingRequestIds": [],
+      "stateRevision": 1
+    },
+    "session": {
+      "createdAt": 1789735941282,
+      "mode": "build",
+      "model": {
+        "modelId": "glm-5.2",
+        "providerId": "a45187b5-dbbc-4342-a6c6-a8c9d42c9304"
+      },
+      "sessionId": "sess_16bf3a5a-2943-485e-af01-8b4a2619277b",
+      "sessionKind": "interactive",
+      "status": "idle",
+      "target": null,
+      "title": "",
+      "traceId": "bf983a98-0d8b-4958-8dba-5aecf093e5f7",
+      "updatedAt": 1789735941282,
+      "workspace": {
+        "workspaceKey": "/Volumes/BAK3T/projects/kanban/zcode-open-bridge-go",
+        "workspacePath": "/Volumes/BAK3T/projects/kanban/zcode-open-bridge-go"
+      }
+    },
+    "settings": {
+      "mode": {
+        "current": "yolo"
+      },
+      "model": {
+        "available": [
+          {
+            "contextWindow": 200000,
+            "label": "glm-5.2",
+            "maxOutputTokens": 128000,
+            "properties": {
+              "inputFormat": {
+                "supportsAudio": false,
+                "supportsImage": false,
+                "supportsPdf": false,
+                "supportsText": true,
+                "supportsVideo": false
+              },
+              "outputFormat": {
+                "supportsText": true
+              }
+            },
+            "providerLabel": "o-sub2pai",
+            "reasoning": {
+              "defaultLevel": "max",
+              "levels": [
+                {
+                  "label": "disabled",
+                  "value": "disabled"
+                },
+                {
+                  "label": "high",
+                  "value": "high"
+                },
+                {
+                  "label": "max",
+                  "value": "max"
+                }
+              ]
+            },
+            "ref": {
+              "modelId": "glm-5.2",
+              "providerId": "a45187b5-dbbc-4342-a6c6-a8c9d42c9304"
+            }
+          }
+        ],
+        "current": {
+          "modelId": "glm-5.2",
+          "options": {
+            "reasoningLevel": "max"
+          },
+          "providerId": "a45187b5-dbbc-4342-a6c6-a8c9d42c9304"
+        },
+        "lastUsed": {
+          "modelId": "glm-5.2",
+          "providerId": "a45187b5-dbbc-4342-a6c6-a8c9d42c9304"
+        }
+      },
+      "permission": {
+        "mode": "yolo"
+      },
+      "thoughtLevel": {
+        "available": [
+          {
+            "label": "disabled",
+            "value": "disabled"
+          },
+          {
+            "label": "high",
+            "value": "high"
+          },
+          {
+            "label": "max",
+            "value": "max"
+          }
+        ],
+        "current": "max",
+        "enabled": true
+      }
+    },
+    "slashCommands": [
+      {
+        "description": "Show or set the current session goal.",
+        "inputHint": "/goal [pause|resume|clear|replace \u003cobjective\u003e|\u003cobjective\u003e]",
+        "name": "goal",
+        "source": "builtin"
+      },
+      {
+        "description": "Compact the current conversation with optional instructions.",
+        "inputHint": "/compact [instructions]",
+        "name": "compact",
+        "source": "builtin"
+      },
+      {
+        "description": "Create or update workspace AGENTS.md instructions.",
+        "inputHint": "/init [notes]",
+        "name": "init",
+        "source": "builtin"
+      },
+      {
+        "description": "Switch to Plan mode and optionally send a task.",
+        "inputHint": "/plan [task]",
+        "name": "plan",
+        "source": "builtin"
+      }
+    ],
+    "todoGroups": [],
+    "todos": []
+  }
+}

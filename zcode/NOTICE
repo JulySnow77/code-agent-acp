@@ -1,0 +1,14 @@
+zcode-open-bridge-go
+====================
+
+This project is a Go port of tizerluo/zcode-open-bridge
+(https://github.com/tizerluo/zcode-open-bridge), MIT licensed.
+
+Porting baseline: upstream commit 3069013 (see upstream.lock), plus the
+AskUserQuestion feature from the local clone's commits (f256268 and the
+uncommitted changes archived in docs/upstream/local-baseline.patch) which
+have not been upstreamed.
+
+Protocol facts recorded in docs/zcode-protocol.md were obtained by
+reverse-engineering the ZCode CLI app-server protocol; ZCode itself is not
+part of, nor bundled with, this project.

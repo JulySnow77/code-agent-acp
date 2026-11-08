@@ -1,0 +1,10 @@
+{
+  "id": "10000003",
+  "method": "session/subscribe",
+  "params": {
+    "afterSeq": 0,
+    "deliveryKind": "desktop-continuous",
+    "includeSnapshot": true,
+    "sessionId": "sess_16bf3a5a-2943-485e-af01-8b4a2619277b"
+  }
+}

@@ -1,0 +1,986 @@
+diff --git a/packages/acp-bridge/zcode-acp-bridge b/packages/acp-bridge/zcode-acp-bridge
+index 638f5ff..1e62742 100755
+--- a/packages/acp-bridge/zcode-acp-bridge
++++ b/packages/acp-bridge/zcode-acp-bridge
+@@ -76,6 +76,10 @@ ZCODE_CREDS_PATH = Path.home() / ".zcode" / "v2" / "config.json"
+ # AskUserQuestion (interaction/requestUserInput) 等用户答复的上限秒数:
+ # 人在回路, 默认 10 分钟; 超时回 cancel 让 zcode 的 turn 优雅结束而非挂死。
+ QUESTION_TIMEOUT_S = float(os.environ.get("ZCODE_ACP_QUESTION_TIMEOUT", "600"))
++# 单个 turn 的 perm_responses 容量上限: 防止一个有漏洞/异常的 ACP client
++# 拿无数不匹配的 reply id 把 turn 字典撑爆 (有界泄漏)。合法的多问题 turn
++# 也就几条 reply, 给一个宽松的 32 足够, 超出时打 warning 并丢最早的。
++_PERM_RESPONSES_CAP = 32
+ # 单个 turn 的总预算秒数: 编码任务常超 2 分钟, 默认 30 分钟。
+ # 超时返回 max_turn_requests, 返回前尽力兜底取 zcode 侧最后一条回复。
+ TURN_TIMEOUT_S = float(os.environ.get("ZCODE_ACP_TURN_TIMEOUT", "1800"))
+@@ -86,6 +90,28 @@ def log(msg):
+     print(f"[zcode-acp] {msg}", file=sys.stderr, flush=True)
+ 
+ 
++# 线材日志 (诊断用): 设 ZCODE_ACP_WIRE_LOG=/path/to.jsonl 后, 把 AskUserQuestion
++# 链路的关键往来 (zcode 的 interaction/requestUserInput、bridge 回给 zcode 的
++# accept/cancel、发给 ACP client 的 session/request_permission、client 的应答)
++# 以 JSON Lines 追加到该文件, 用于排查"答案没传到 agent / 问题重复显示"类问题。
++# 默认关闭, 不影响协议流。
++_WIRE_LOG_PATH = os.environ.get("ZCODE_ACP_WIRE_LOG", "")
++
++
++def wire_log(direction, kind, obj):
++    """追加一条线材日志 (best-effort, 失败静默, 绝不拖垮协议)。"""
++    if not _WIRE_LOG_PATH:
++        return
++    try:
++        with open(_WIRE_LOG_PATH, "a", encoding="utf-8") as f:
++            f.write(json.dumps(
++                {"t": round(time.time(), 3), "dir": direction, "kind": kind,
++                 "msg": obj},
++                ensure_ascii=False, default=str) + "\n")
++    except OSError:
++        pass
++
++
+ def load_zcode_credentials():
+     """从 v2/config.json 动态读取凭证 (不明文存储)。
+ 
+@@ -238,6 +264,7 @@ class ZCodeBackend:
+                     # 路由到该会话的事件 listener (事件驱动 turn 循环里翻译成
+                     # ACP session/request_permission); 无 listener (轮询降级 /
+                     # turn 外到达) 则立即回 cancel, 绝不能让 zcode 挂死等待。
++                    wire_log("zcode→bridge", "interaction/requestUserInput", msg)
+                     params = msg.get("params", {}) or {}
+                     sid = params.get("sessionId")
+                     with self._listeners_lock:
+@@ -267,6 +294,10 @@ class ZCodeBackend:
+                         })
+                     else:
+                         log(f"interaction/requestUserInput (sid={sid}) 无事件 turn, 回 cancel")
++                        wire_log("bridge→zcode", "reply", {"id": msg_id, "result": {
++                            "action": "cancel",
++                            "reason": "bridge has no interactive turn to ask the user",
++                        }})
+                         self.respond(msg_id, result={
+                             "action": "cancel",
+                             "reason": "bridge has no interactive turn to ask the user",
+@@ -2424,11 +2455,17 @@ class ACPBridge:
+         for q in questions:
+             answer = self._ask_one_question(acp_sid, turn, q, payload)
+             if answer is None:
+-                log("  [ask] 用户取消/超时, 回 cancel")
++                # 取消的具体原因 (turn cancel / 超时 / 非 selected outcome / error)
++                # 已在 _ask_one_question / _answer_from_perm_response 里分别打过日志,
++                # 这里只汇总向 zcode 回 cancel 这一动作。
++                log(f"  [ask] 问题未拿到答案, 向 zcode 回 cancel (rpcId={rpc_id})")
++                wire_log("bridge→zcode", "reply", {"id": rpc_id, "result": {"action": "cancel"}})
+                 self.backend.respond(rpc_id, result={"action": "cancel"})
+                 return
+             answers[q.get("question", "")] = answer
+         log("  [ask] 收到全部答案, 回 accept")
++        wire_log("bridge→zcode", "reply",
++                 {"id": rpc_id, "result": {"action": "accept", "content": {"answers": answers}}})
+         self.backend.respond(rpc_id, result={"action": "accept",
+                                              "content": {"answers": answers}})
+ 
+@@ -2456,15 +2493,22 @@ class ACPBridge:
+             },
+             "options": options,
+         })
++        wire_log("bridge→acp", "session/request_permission",
++                 {"id": req_id, "questions": [question], "options": options})
+         deadline = time.time() + QUESTION_TIMEOUT_S
++        start = time.time()
+         while time.time() < deadline:
+             self._drain_inbox()
+             if turn["cancelled"]:
++                log(f"  [ask] {req_id} turn 被 cancel, 回 None")
+                 return None
+             resp = turn.get("perm_responses", {}).pop(req_id, None)
+             if resp is not None:
++                wire_log("acp→bridge", "permission_reply", {"id": req_id, "resp": resp})
+                 return self._answer_from_perm_response(resp, question)
+             time.sleep(0.1)
++        log(f"  [ask] {req_id} 等待 {time.time()-start:.1f}s 超时 (>"
++            f"{QUESTION_TIMEOUT_S}s 无 reply), 回 None")
+         return None
+ 
+     @staticmethod
+@@ -2475,13 +2519,22 @@ class ACPBridge:
+         list (omnigent 表单的 multiSelect); 其他 → 自由文本原样。
+         cancelled / 错误 / __cancel__ → None。
+         """
+-        if not isinstance(resp, dict) or "error" in resp:
++        if not isinstance(resp, dict):
++            log(f"  [ask] permission reply 非 dict ({type(resp).__name__}), 当作取消")
++            return None
++        if "error" in resp:
++            # client 返回 JSON-RPC error —— 和用户主动取消不同, 单独打日志便于排查
++            log(f"  [ask] permission reply 带 error: {resp.get('error')!r}, 当作取消")
+             return None
+         outcome = (resp.get("result") or {}).get("outcome") or {}
+         if outcome.get("outcome") != "selected":
++            # 用户点了 reject_once (__cancel__ 之外的拒绝) 或 client 合成了 cancel
++            log(f"  [ask] permission outcome 非 selected ({outcome.get('outcome')!r}), "
++                f"当作取消")
+             return None
+         option_id = outcome.get("optionId")
+         if not isinstance(option_id, str) or not option_id or option_id == "__cancel__":
++            log(f"  [ask] selected 但 optionId 异常 ({option_id!r}), 当作取消")
+             return None
+         labels = {o.get("label") for o in question.get("options", []) if isinstance(o, dict)}
+         if option_id in labels:
+@@ -2549,10 +2602,25 @@ class ACPBridge:
+                         turn["cancelled"] = True
+                         log(f"[inbox] session/cancel: 标记 turn {tid} 取消")
+                 continue
+-            # 带 id 的消息: 视为对 pending permission 的响应, 存入 turn
++            # 带 id 的消息: 视为对 pending permission 的响应, 存入每个 pending turn。
++            # 不在这里按 id 硬过滤: 多问题场景下, 后一个问题的 reply 完全可能在前一个
++            # 问题还在 polling 时就到达 inbox (客户端并发答复), 硬过滤会把这种合法的
++            # 预取 reply 当孤儿丢掉, 反而让后续问题永远等不到。
++            # 防泄漏改用 per-turn 容量上限: 一个 turn 内不应堆积超过合理数量的未消费
++            # reply (合法多问题也就几条); 超出说明客户端在刷异常 reply, 打 warning 并
++            # 丢弃最早的, 既不无限制增长也不影响正常流程。
+             if msg_id is not None:
++                if not self.pending_turns:
++                    log(f"[inbox] 收到 permission reply id={msg_id} 但无在飞 turn, "
++                        f"丢弃 (turn 已结束? 迟到/孤儿 reply)")
++                    continue
+                 for turn in self.pending_turns.values():
+-                    turn.setdefault("perm_responses", {})[msg_id] = req
++                    perms = turn.setdefault("perm_responses", {})
++                    if msg_id not in perms and len(perms) >= _PERM_RESPONSES_CAP:
++                        log(f"[inbox] turn perm_responses 已达上限 "
++                            f"{_PERM_RESPONSES_CAP}, 丢弃最早的 reply 以容纳 id={msg_id}")
++                        perms.pop(next(iter(perms), None), None)
++                    perms[msg_id] = req
+                 continue
+             # 其他 notification: 暂忽略
+ 
+diff --git a/tests/fakes/zcode_app_server b/tests/fakes/zcode_app_server
+index e47741c..c1af0bb 100755
+--- a/tests/fakes/zcode_app_server
++++ b/tests/fakes/zcode_app_server
+@@ -39,6 +39,16 @@ Protocol surface
+ - ``session/send``      → starts a scripted turn. The turn's shape is
+   selected by the prompt text:
+ 
++  * contains ``ASK_USER_QUESTION_TWICE`` → push ``turn.started``, then
++    TWO sequential ``interaction/requestUserInput`` rounds in the one
++    turn (distinct rpcIds): after the first reply arrives, ask a second
++    question, then ``turn.completed``. Mirrors the production regression
++    "the question list displays again" — the model re-asks after a
++    cancelled/lost answer.
++  * contains ``ASK_USER_QUESTION_MULTI`` → one
++    ``interaction/requestUserInput`` carrying TWO questions (the second
++    ``multiSelect: true``), block until the client replies, then
++    ``turn.completed``.
+   * contains ``ASK_USER_QUESTION`` → push ``turn.started``, then send a
+     server-initiated ``interaction/requestUserInput`` (with a single
+     question), block until the client replies, then push
+@@ -52,11 +62,15 @@ surfaces loudly instead of hanging the bridge.
+ Answer delivery assertion
+ -------------------------
+ The fake only emits ``turn.completed`` for an AskUserQuestion turn
+-*after* it received the bridge's ``accept`` reply to its
++*after* it received the bridge's reply to each
+ ``interaction/requestUserInput``. So if the bridge fails to deliver the
+ user's answer (the regression symptom), the turn hangs until the
+ ``ANSWER_TIMEOUT_S`` deadline and the fake emits ``turn.failed``
+ instead — the test asserts on ``stopReason`` to tell the two apart.
++With ``FAKE_ZCODE_STATE_FILE`` set, the literal reply payloads are also
++written to that file (single round: the reply dict; multi round:
++``{"replies": [...]}``) so tests assert the exact accept/cancel
++payload zcode received.
+ """
+ 
+ from __future__ import annotations
+@@ -126,62 +140,46 @@ def _session_event(session_id: str, seq: int, event_type: str, payload: dict[str
+     )
+ 
+ 
+-def _run_question_turn(session_id: str, msg_id: int | str | None) -> None:
+-    """Push turn.started, send requestUserInput, await the reply, then turn.completed.
++def _omit_session_id() -> bool:
++    """Test hook: FAKE_ZCODE_OMIT_SESSION_ID simulates a real CLI that emits
++    interaction/requestUserInput WITHOUT a top-level sessionId (or with one
++    that doesn't match the session/create id). The bridge's _reader_loop
++    routes by params.sessionId — a missing/mismatched id must not silently
++    cancel the question (the regression symptom: question re-displays, web
++    submit 404s).
++    """
++    return bool(os.environ.get("FAKE_ZCODE_OMIT_SESSION_ID"))
+ 
+-    The reply the client sends back (``accept`` + ``content.answers``) is
+-    captured into ``_SESSIONS[session_id]["last_answer"]`` so a test can
+-    assert the answer reached zcode — the regression symptom was "the
+-    answer never reaches the zcode agent".
+ 
+-    Runs in a background thread: real zcode acknowledges ``session/send``
+-    synchronously and streams turn events asynchronously, so the turn
+-    body must not block the ``session/send`` response (the bridge's
+-    event-driven loop consumes these events and synthesizes the prompt
+-    response itself when it sees ``turn.completed``).
+-    """
+-    state = _SESSIONS.setdefault(session_id, {"seq": 0, "last_answer": None})
+-    seq = state["seq"] + 1
+-    state["seq"] = seq
+-    _session_event(session_id, seq, "turn.started", {"prompt": "ask_user_question"})
++def _ask_and_wait(session_id: str, state: dict[str, Any], questions: list[dict[str, Any]]) -> dict[str, Any] | None:
++    """Send one ``interaction/requestUserInput`` and block for the bridge's reply.
+ 
+-    # Server-initiated AskUserQuestion — exactly the shape a real ZCode
+-    # CLI emits when the model calls the AskUserQuestion tool.
++    Returns the reply message (``accept`` + ``content.answers`` or
++    ``cancel``), or ``None`` on timeout so a broken bridge fails the test
++    instead of hanging it forever. The reply is appended to
++    ``state["replies"]`` so a test can assert the literal payload zcode
++    received — stronger than inferring delivery from stopReason alone.
++    """
+     req_id = _next_req_id()
+     reply_holder: dict[str, Any] = {"reply": None}
+     reply_event = threading.Event()
+     state["pending_input"] = {"req_id": req_id, "holder": reply_holder, "event": reply_event}
+ 
+-    # Test hook: FAKE_ZCODE_OMIT_SESSION_ID simulates a real CLI that
+-    # emits interaction/requestUserInput WITHOUT a top-level sessionId
+-    # (or with one that doesn't match the session/create id). The bridge's
+-    # _reader_loop routes by params.sessionId — a missing/mismatched id
+-    # must not silently cancel the question (the regression symptom:
+-    # question re-displays, web submit 404s).
+-    if os.environ.get("FAKE_ZCODE_OMIT_SESSION_ID"):
+-        request_params = {
+-            "requestId": "req-1",
+-            "toolCallId": "tc-ask-1",
++    n = len(state.get("replies") or [])
++    if _omit_session_id():
++        request_params: dict[str, Any] = {
++            "requestId": f"req-{n + 1}",
++            "toolCallId": f"tc-ask-{n + 1}",
+             "toolName": "AskUserQuestion",
+         }
+     else:
+         request_params = {
+             "sessionId": session_id,
+-            "requestId": "req-1",
+-            "toolCallId": "tc-ask-1",
++            "requestId": f"req-{n + 1}",
++            "toolCallId": f"tc-ask-{n + 1}",
+             "toolName": "AskUserQuestion",
+         }
+-    request_params["questions"] = [
+-        {
+-            "question": "Which framework should we use?",
+-            "header": "Framework",
+-            "options": [
+-                {"label": "React", "value": "React"},
+-                {"label": "Vue", "value": "Vue"},
+-            ],
+-            "multiSelect": False,
+-        }
+-    ]
++    request_params["questions"] = questions
+ 
+     _send(
+         {
+@@ -192,41 +190,159 @@ def _run_question_turn(session_id: str, msg_id: int | str | None) -> None:
+         }
+     )
+ 
+-    # Block until the bridge answers (or timeout so a broken bridge
+-    # fails the test instead of hanging it forever). The bridge's
+-    # _handle_user_input_request replies with accept+answers or cancel.
+     answered = reply_event.wait(timeout=ANSWER_TIMEOUT_S)
+     state["pending_input"] = None
++    if not answered:
++        state.setdefault("replies", []).append({"error": "timeout waiting for bridge reply"})
++        return None
++    reply = reply_holder["reply"]
++    state.setdefault("replies", []).append(reply)
++    return reply
+ 
++
++def _persist_replies(state: dict[str, Any]) -> None:
++    """Persist the bridge's replies so a test can assert the literal payload.
++
++    Opt-in via FAKE_ZCODE_STATE_FILE. Single-round turns write the one reply
++    dict directly (back-compat with the original tests); multi-round turns
++    write ``{"replies": [...]}``.
++    """
++    state_path = os.environ.get("FAKE_ZCODE_STATE_FILE")
++    if not state_path:
++        return
++    replies = state.get("replies") or []
++    payload: Any = replies[0] if len(replies) == 1 else {"replies": replies}
++    try:
++        with open(state_path, "w", encoding="utf-8") as f:
++            json.dump(payload, f, ensure_ascii=False)
++    except OSError:
++        pass
++
++
++def _finish_turn(session_id: str, state: dict[str, Any], ok: bool) -> None:
+     seq = state["seq"] + 1
+     state["seq"] = seq
+-    if not answered:
+-        state["last_answer"] = {"error": "timeout waiting for bridge reply"}
++    if ok:
++        _session_event(
++            session_id,
++            seq,
++            "turn.completed",
++            {"resultType": "success", "usage": {"totalTokens": 12}},
++        )
++    else:
+         _session_event(
+             session_id,
+             seq,
+             "turn.failed",
+             {"resultType": "error_request_timeout"},
+         )
++
++
++_FRAMEWORK_QUESTION = {
++    "question": "Which framework should we use?",
++    "header": "Framework",
++    "options": [
++        {"label": "React", "value": "React"},
++        {"label": "Vue", "value": "Vue"},
++    ],
++    "multiSelect": False,
++}
++
++_PLATFORMS_QUESTION = {
++    "question": "Which platforms must be supported?",
++    "header": "Platforms",
++    "options": [
++        {"label": "iOS", "value": "iOS"},
++        {"label": "Android", "value": "Android"},
++        {"label": "Web", "value": "Web"},
++    ],
++    "multiSelect": True,
++}
++
++_THEME_QUESTION = {
++    "question": "Pick a color theme?",
++    "header": "Theme",
++    "options": [
++        {"label": "Light", "value": "Light"},
++        {"label": "Dark", "value": "Dark"},
++    ],
++    "multiSelect": False,
++}
++
++
++def _start_turn(session_id: str, state: dict[str, Any], prompt: str) -> None:
++    seq = state["seq"] + 1
++    state["seq"] = seq
++    _session_event(session_id, seq, "turn.started", {"prompt": prompt})
++
++
++def _run_question_turn(session_id: str, msg_id: int | str | None) -> None:
++    """Single-question turn: requestUserInput → await reply → turn.completed.
++
++    The reply the client sends back (``accept`` + ``content.answers``) is
++    captured into ``state[\"replies\"]`` so a test can assert the answer
++    reached zcode — the regression symptom was "the answer never reaches
++    the zcode agent".
++
++    Runs in a background thread: real zcode acknowledges ``session/send``
++    synchronously and streams turn events asynchronously, so the turn
++    body must not block the ``session/send`` response (the bridge's
++    event-driven loop consumes these events and synthesizes the prompt
++    response itself when it sees ``turn.completed``).
++    """
++    state = _SESSIONS.setdefault(session_id, {"seq": 0, "replies": []})
++    _start_turn(session_id, state, "ask_user_question")
++    reply = _ask_and_wait(session_id, state, [_FRAMEWORK_QUESTION])
++    if reply is None:
++        _finish_turn(session_id, state, ok=False)
+         return
++    _persist_replies(state)
++    _finish_turn(session_id, state, ok=True)
+ 
+-    state["last_answer"] = reply_holder["reply"]
+-    # Persist the bridge's reply so a test can assert the literal
+-    # accept+answers payload zcode received — stronger than inferring
+-    # delivery from stopReason alone. Opt-in via FAKE_ZCODE_STATE_FILE.
+-    state_path = os.environ.get("FAKE_ZCODE_STATE_FILE")
+-    if state_path:
+-        try:
+-            with open(state_path, "w", encoding="utf-8") as f:
+-                json.dump(reply_holder["reply"], f, ensure_ascii=False)
+-        except OSError:
+-            pass
+-    _session_event(
+-        session_id,
+-        seq,
+-        "turn.completed",
+-        {"resultType": "success", "usage": {"totalTokens": 12}},
++
++def _run_multi_question_turn(session_id: str, msg_id: int | str | None) -> None:
++    """One requestUserInput carrying TWO questions (q2 multiSelect).
++
++    Mirrors the real zcode AskUserQuestion batch: the model can ask up to
++    several questions in a single tool call. The bridge must fan them out
++    as sequential ``session/request_permission`` prompts and deliver ALL
++    answers in ONE ``accept`` reply keyed by each question's text.
++    """
++    state = _SESSIONS.setdefault(session_id, {"seq": 0, "replies": []})
++    _start_turn(session_id, state, "ask_user_question_multi")
++    reply = _ask_and_wait(
++        session_id, state, [_FRAMEWORK_QUESTION, _PLATFORMS_QUESTION]
+     )
++    if reply is None:
++        _finish_turn(session_id, state, ok=False)
++        return
++    _persist_replies(state)
++    _finish_turn(session_id, state, ok=True)
++
++
++def _run_twice_question_turn(session_id: str, msg_id: int | str | None) -> None:
++    """TWO sequential requestUserInput rounds inside ONE turn.
++
++    This is the production regression shape "the question list
++displays again": after the first request was answered (or cancelled),
++    the model re-asks before the turn ends. Each round is a distinct
++    server-initiated request with its own rpcId; the bridge must surface
++    BOTH as separate ``session/request_permission`` (fresh ids) and reply
++    to each rpcId separately. Both replies are persisted so a test can
++    assert round 1 got its reply AND round 2 got its own.
++    """
++    state = _SESSIONS.setdefault(session_id, {"seq": 0, "replies": []})
++    _start_turn(session_id, state, "ask_user_question_twice")
++    reply1 = _ask_and_wait(session_id, state, [_FRAMEWORK_QUESTION])
++    if reply1 is None:
++        _finish_turn(session_id, state, ok=False)
++        return
++    reply2 = _ask_and_wait(session_id, state, [_THEME_QUESTION])
++    if reply2 is None:
++        _finish_turn(session_id, state, ok=False)
++        return
++    _persist_replies(state)
++    _finish_turn(session_id, state, ok=True)
+ 
+ 
+ def _run_text_turn(session_id: str, msg_id: int | str | None, prompt: str) -> None:
+@@ -306,7 +422,18 @@ def _dispatch(msg: dict[str, Any]) -> None:
+         # backend.request("session/send") would never return and the
+         # event-driven turn loop would never start — the turn would hang.
+         _response(msg_id, {"accepted": True})
+-        if "ASK_USER_QUESTION" in text:
++        # Marker dispatch order matters: the MULTI/TWICE markers contain
++        # the plain ASK_USER_QUESTION substring, so they must be matched
++        # first.
++        if "ASK_USER_QUESTION_TWICE" in text:
++            threading.Thread(
++                target=_run_twice_question_turn, args=(sid, None), daemon=True
++            ).start()
++        elif "ASK_USER_QUESTION_MULTI" in text:
++            threading.Thread(
++                target=_run_multi_question_turn, args=(sid, None), daemon=True
++            ).start()
++        elif "ASK_USER_QUESTION" in text:
+             threading.Thread(
+                 target=_run_question_turn, args=(sid, None), daemon=True
+             ).start()
+diff --git a/tests/test_ask_user_question.py b/tests/test_ask_user_question.py
+index 853a702..4ab0108 100644
+--- a/tests/test_ask_user_question.py
++++ b/tests/test_ask_user_question.py
+@@ -294,5 +294,96 @@ class TestHandleUserInputRequest(unittest.TestCase):
+         })
+ 
+ 
++def _stderr_of(fn):
++    """Run fn() capturing stderr (where log() writes). Returns the text."""
++    buf = io.StringIO()
++    with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(buf):
++        fn()
++    return buf.getvalue()
++
++
++class TestFailureModeLogs(unittest.TestCase):
++    """四个静默失败模式现在必须打可辨识的日志, 否则回归无法诊断。
++
++    覆盖: 非 selected outcome / error 响应 / 超时 / turn 结束后到达的迟到 reply。
++    每条都断言 (a) 行为正确 (回 cancel 给 zcode 或丢弃) 且 (b) stderr 有对应的
++    诊断日志 —— 这是根因 B 的可观测性兜底。
++    """
++
++    def _event(self, questions=None):
++        return {
++            "type": "interaction.requestUserInput",
++            "rpcId": 42,
++            "payload": {
++                "sessionId": "z1", "requestId": "req-1", "toolCallId": "tc-1",
++                "toolName": "AskUserQuestion",
++                "questions": questions if questions is not None else [_QUESTION],
++            },
++        }
++
++    def test_non_selected_outcome_logs_and_cancels(self):
++        # outcome=cancelled (非 selected) 以前静默 cancel, 现在要打 "非 selected" 日志
++        bridge, turn = _bridge_with_turn()
++        bridge._inbox.put(json.dumps(
++            {"jsonrpc": "2.0", "id": "uq_1",
++             "result": {"outcome": {"outcome": "cancelled"}}}))
++        err = _stderr_of(
++            lambda: bridge._handle_user_input_request(self._event(), "acp-s1", turn))
++        self.assertEqual(bridge.backend.replies[0]["result"], {"action": "cancel"})
++        self.assertIn("非 selected", err)
++
++    def test_error_response_logs_and_cancels(self):
++        # JSON-RPC error 响应也要 cancel, 且日志区分于用户取消
++        bridge, turn = _bridge_with_turn()
++        bridge._inbox.put(json.dumps(
++            {"jsonrpc": "2.0", "id": "uq_1",
++             "error": {"code": -32603, "message": "boom"}}))
++        err = _stderr_of(
++            lambda: bridge._handle_user_input_request(self._event(), "acp-s1", turn))
++        self.assertEqual(bridge.backend.replies[0]["result"], {"action": "cancel"})
++        self.assertIn("error", err)
++
++    def test_timeout_logs_req_id_and_cancels(self):
++        bridge, turn = _bridge_with_turn()
++        old = MOD.QUESTION_TIMEOUT_S
++        MOD.QUESTION_TIMEOUT_S = 0.15
++        try:
++            err = _stderr_of(
++                lambda: bridge._handle_user_input_request(self._event(), "acp-s1", turn))
++        finally:
++            MOD.QUESTION_TIMEOUT_S = old
++        self.assertEqual(bridge.backend.replies[0]["result"], {"action": "cancel"})
++        self.assertIn("uq_1", err)
++        self.assertIn("超时", err)
++
++    def test_reply_after_turn_ended_is_dropped_with_log(self):
++        # turn 已不在 pending_turns 时, _drain_inbox 收到 reply 要 warning 且不崩
++        bridge = MOD.ACPBridge()
++        bridge.backend = RespondRecorder()
++        # 不注册任何 turn → pending_turns 为空
++        bridge._inbox.put(json.dumps(
++            {"jsonrpc": "2.0", "id": "uq_99",
++             "result": {"outcome": {"outcome": "selected", "optionId": "Vue"}}}))
++        err = _stderr_of(bridge._drain_inbox)
++        self.assertIn("无在飞 turn", err)
++        self.assertEqual(bridge.backend.replies, [])  # 不该有副作用
++
++    def test_perm_responses_cap_evicts_oldest(self):
++        # _PERM_RESPONSES_CAP 之外的 reply 不应无限制堆积; 超限丢最早且打 warning
++        bridge = MOD.ACPBridge()
++        bridge.backend = RespondRecorder()
++        turn = {"zcode_sid": "z1", "cancelled": False}
++        bridge.pending_turns["p1"] = turn
++        cap = MOD._PERM_RESPONSES_CAP
++        for i in range(cap + 3):
++            bridge._inbox.put(json.dumps(
++                {"jsonrpc": "2.0", "id": f"uq_{i}",
++                 "result": {"outcome": {"outcome": "selected", "optionId": "x"}}}))
++        err = _stderr_of(bridge._drain_inbox)
++        perms = turn["perm_responses"]
++        self.assertLessEqual(len(perms), cap)  # 不超上限
++        self.assertIn("上限", err)             # 有 warning
++
++
+ if __name__ == "__main__":
+     unittest.main(verbosity=2)
+diff --git a/tests/test_ask_user_question_e2e.py b/tests/test_ask_user_question_e2e.py
+index eb477a2..ea5b4fa 100644
+--- a/tests/test_ask_user_question_e2e.py
++++ b/tests/test_ask_user_question_e2e.py
+@@ -21,6 +21,14 @@ What this catches that the unit tests cannot
+   to zcode — the regression symptom is "the question re-displays because
+   the agent never received the answer" (the bridge must reply to the
+   ``interaction/requestUserInput`` with ``accept`` + the answers map).
++* A multi-question batch (real zcode asks several questions in ONE
++  ``interaction/requestUserInput``) where the bridge must fan out one
++  ``session/request_permission`` per question and deliver every answer
++  in a single ``accept`` — verified against the real ZCode CLI.
++* A re-ask inside the SAME turn (the model asks again after a cancelled
++  or lost answer — the production "the question list displays again"
++  symptom): the bridge must surface the second request as a fresh
++  permission request and keep the two rounds' replies separate.
+ * Stdio framing bugs (interleaved frames, missing newlines) that only
+   appear with a real subprocess pair.
+ 
+@@ -159,6 +167,53 @@ def _spawn_bridge(env_overrides: dict[str, str] | None = None) -> subprocess.Pop
+     )
+ 
+ 
++def _init_and_new_session(client: ACPClient) -> str:
++    """initialize + session/new, returning the ACP sessionId."""
++    client.request(1, "initialize", {"protocolVersion": 1, "clientCapabilities": {}})
++    init = client.wait_response(1)
++    assert init["result"]["protocolVersion"] == 1
++    client.request(2, "session/new", {"cwd": "/tmp"})
++    new_session = client.wait_response(2)
++    acp_sid = new_session["result"]["sessionId"]
++    assert acp_sid
++    return acp_sid
++
++
++def _drive_prompt(
++    client: ACPClient,
++    acp_sid: str,
++    prompt_text: str,
++    answer_perm: Any,
++    timeout: float = 30.0,
++    prompt_id: int = 3,
++) -> tuple[list[dict[str, Any]], dict[str, Any] | None]:
++    """Send session/prompt and drain until the prompt response lands.
++
++    ``answer_perm(msg, perms)`` runs for every mid-turn
++    ``session/request_permission`` (it decides what — and whether — to
++    reply). Returns ``(perm_requests, prompt_response_or_None)``.
++    """
++    client.request(prompt_id, "session/prompt", {
++        "sessionId": acp_sid,
++        "prompt": [{"type": "text", "text": prompt_text}],
++    })
++    perms: list[dict[str, Any]] = []
++    prompt_resp: dict[str, Any] | None = None
++    deadline = time.time() + timeout
++    while time.time() < deadline and prompt_resp is None:
++        try:
++            msg = client.inbox.get(timeout=0.5)
++        except queue.Empty:
++            continue
++        if msg.get("method") == "session/request_permission":
++            perms.append(msg)
++            answer_perm(msg, perms)
++            continue
++        if msg.get("id") == prompt_id and msg.get("method") is None:
++            prompt_resp = msg
++    return perms, prompt_resp
++
++
+ class TestAskUserQuestionE2E(unittest.TestCase):
+     """Drives the real bridge + fake zcode through one AskUserQuestion turn."""
+ 
+@@ -369,5 +424,327 @@ class TestAskUserQuestionRoutingRegression(unittest.TestCase):
+             client.close()
+ 
+ 
++class TestAskUserQuestionTimeoutE2E(unittest.TestCase):
++    """A permission request the ACP client never answers must time out, not hang.
++
++    Mirrors root-cause B-1: if omnigent never replies to the
++    ``session/request_permission`` (e.g. the web elicitation was abandoned),
++    the bridge's per-question polling loop hits ``QUESTION_TIMEOUT_S`` and
++    must reply ``{"action": "cancel"}`` to zcode so the turn ends — never
++    block forever. The unit test already pins the cancel; this e2e pins the
++    full subprocess path (real bridge + fake zcode + no ACP reply) and that
++    the timeout is observable on stderr (the new diagnostic log).
++    """
++
++    def setUp(self) -> None:
++        self._state_file = tempfile.NamedTemporaryFile(
++            mode="w", suffix=".json", delete=False
++        )
++        self._state_file.close()
++
++    def tearDown(self) -> None:
++        try:
++            os.unlink(self._state_file.name)
++        except OSError:
++            pass
++
++    def test_timeout_replies_cancel_to_zcode(self) -> None:
++        proc = _spawn_bridge({
++            "FAKE_ZCODE_STATE_FILE": self._state_file.name,
++            # 1s question timeout — short enough to keep the test fast,
++            # long enough that the turn has time to surface the request.
++            "ZCODE_ACP_QUESTION_TIMEOUT": "1",
++        })
++        client = ACPClient(proc)
++        try:
++            client.request(1, "initialize", {"protocolVersion": 1})
++            client.wait_response(1)
++            client.request(2, "session/new", {"cwd": "/tmp"})
++            new_session = client.wait_response(2)
++            acp_sid = new_session["result"]["sessionId"]
++
++            client.request(3, "session/prompt", {
++                "sessionId": acp_sid,
++                "prompt": [{"type": "text", "text": "ASK_USER_QUESTION"}],
++            })
++
++            # See the permission request but DELIBERATELY do not reply.
++            # Then wait for the prompt to complete via the timeout path.
++            perm_seen: list[dict[str, Any]] = []
++            prompt_resp: dict[str, Any] | None = None
++            # 1s question timeout + bridge polling overhead; allow 15s.
++            deadline = time.time() + 15.0
++            while time.time() < deadline and prompt_resp is None:
++                try:
++                    msg = client.inbox.get(timeout=0.5)
++                except queue.Empty:
++                    continue
++                if msg.get("method") == "session/request_permission":
++                    perm_seen.append(msg)
++                    continue
++                if msg.get("id") == 3 and msg.get("method") is None:
++                    prompt_resp = msg
++
++            self.assertGreaterEqual(len(perm_seen), 1,
++                                    "bridge never asked the question")
++            self.assertIsNotNone(prompt_resp,
++                                 "bridge hung on the unanswered question instead of timing out")
++
++            # The cancel the bridge sent to zcode is recorded in the state file.
++            with open(self._state_file.name, encoding="utf-8") as f:
++                zcode_reply = json.load(f)
++            self.assertEqual(zcode_reply["result"]["action"], "cancel")
++        finally:
++            client.close()
++
++
++class TestAskUserQuestionMultiQuestionE2E(unittest.TestCase):
++    """One requestUserInput carrying N questions → N sequential permission
++    requests → ONE accept carrying every answer keyed by question text.
++
++    Real zcode batches several questions in a single
++    ``interaction/requestUserInput`` (verified against the real CLI: the
++    model asked 2 questions in one tool call, the bridge fanned them out
++    as uq_1/uq_2). The web client renders+answers each card; zcode must
++    receive ALL answers in a single accept reply. A bridge that drops
++    later answers leaves the model without the full result — the web
++    then shows the question list again and a re-submit hits an
++    already-answered request (the production symptom).
++    """
++
++    def setUp(self) -> None:
++        self._state_file = tempfile.NamedTemporaryFile(
++            mode="w", suffix=".json", delete=False
++        )
++        self._state_file.close()
++
++    def tearDown(self) -> None:
++        try:
++            os.unlink(self._state_file.name)
++        except OSError:
++            pass
++
++    def test_multi_question_batch_delivers_all_answers(self) -> None:
++        proc = _spawn_bridge({"FAKE_ZCODE_STATE_FILE": self._state_file.name})
++        client = ACPClient(proc)
++        try:
++            acp_sid = _init_and_new_session(client)
++
++            def answer(msg: dict[str, Any], perms: list[dict[str, Any]]) -> None:
++                if len(perms) == 1:
++                    # Question 1 (framework): single-select label.
++                    option_id: Any = "Vue"
++                else:
++                    # Question 2 (platforms, multiSelect): omnigent encodes
++                    # a list answer as a JSON-array string optionId — pin
++                    # that encoding end-to-end here.
++                    option_id = json.dumps(["iOS", "Web"], ensure_ascii=False)
++                client.send({
++                    "jsonrpc": "2.0",
++                    "id": msg["id"],
++                    "result": {"outcome": {"outcome": "selected", "optionId": option_id}},
++                })
++
++            perms, prompt_resp = _drive_prompt(
++                client, acp_sid, "Please ASK_USER_QUESTION_MULTI now.", answer
++            )
++
++            # One session/request_permission per question, with distinct
++            # request ids (the web keys each card by id).
++            self.assertEqual(len(perms), 2,
++                             "expected one permission request per batched question")
++            self.assertNotEqual(perms[0]["id"], perms[1]["id"])
++
++            # Each card carries exactly ONE question in rawInput (the
++            # bridge fans the batch out) so omnigent renders a form for
++            # that single question.
++            q1 = perms[0]["params"]["toolCall"]["rawInput"]["questions"]
++            q2 = perms[1]["params"]["toolCall"]["rawInput"]["questions"]
++            self.assertEqual([q.get("question") for q in q1],
++                             ["Which framework should we use?"])
++            self.assertEqual([q.get("question") for q in q2],
++                             ["Which platforms must be supported?"])
++            self.assertTrue(q2[0].get("multiSelect"))
++            self.assertEqual(perms[0]["params"]["toolCall"]["title"], "AskUserQuestion")
++            self.assertEqual(perms[1]["params"]["toolCall"]["title"], "AskUserQuestion")
++
++            self.assertIsNotNone(
++                prompt_resp,
++                "prompt never completed — a batched answer likely not delivered",
++            )
++            self.assertEqual(prompt_resp["result"]["stopReason"], "end_turn")
++
++            # The literal accept payload zcode received: ONE reply with
++            # BOTH answers, keyed by question text (the key zcode's
++            # normalizeAskUserQuestion reads), the multiSelect answer as
++            # a real list.
++            with open(self._state_file.name, encoding="utf-8") as f:
++                zcode_reply = json.load(f)
++            self.assertEqual(zcode_reply["result"]["action"], "accept")
++            self.assertEqual(
++                zcode_reply["result"]["content"]["answers"],
++                {
++                    "Which framework should we use?": "Vue",
++                    "Which platforms must be supported?": ["iOS", "Web"],
++                },
++            )
++        finally:
++            client.close()
++
++
++class TestAskUserQuestionReaskE2E(unittest.TestCase):
++    """The production regression shape: the question displays AGAIN in the
++    same turn.
++
++    After the first ``interaction/requestUserInput`` is answered (or
++    cancelled because the web reply was lost), the model may re-ask
++    before the turn ends. zcode then emits a SECOND server-initiated
++    request with a fresh rpcId. The bridge must surface it as a NEW
++    ``session/request_permission`` (fresh id — the web keys cards by
++    id), deliver the second round's answer to the second rpcId, and
++    never let a stale reply for round 1 satisfy or corrupt round 2.
++    """
++
++    def setUp(self) -> None:
++        self._state_file = tempfile.NamedTemporaryFile(
++            mode="w", suffix=".json", delete=False
++        )
++        self._state_file.close()
++
++    def tearDown(self) -> None:
++        try:
++            os.unlink(self._state_file.name)
++        except OSError:
++            pass
++
++    def _read_state_replies(self) -> list[dict[str, Any]]:
++        with open(self._state_file.name, encoding="utf-8") as f:
++            payload = json.load(f)
++        if isinstance(payload, dict) and "replies" in payload:
++            return payload["replies"]
++        return [payload]
++
++    def test_second_request_in_same_turn_surfaces_and_delivers(self) -> None:
++        proc = _spawn_bridge({"FAKE_ZCODE_STATE_FILE": self._state_file.name})
++        client = ACPClient(proc)
++        try:
++            acp_sid = _init_and_new_session(client)
++
++            def answer(msg: dict[str, Any], perms: list[dict[str, Any]]) -> None:
++                if len(perms) == 1:
++                    # Round 1: user dismisses the card (or the web reply
++                    # was lost and the bridge is replaying the cancel).
++                    client.send({
++                        "jsonrpc": "2.0",
++                        "id": msg["id"],
++                        "result": {"outcome": {"outcome": "cancelled"}},
++                    })
++                else:
++                    # Round 2 (re-ask): the user answers for real.
++                    client.send({
++                        "jsonrpc": "2.0",
++                        "id": msg["id"],
++                        "result": {"outcome": {"outcome": "selected",
++                                               "optionId": "Dark"}},
++                    })
++
++            perms, prompt_resp = _drive_prompt(
++                client, acp_sid, "ASK_USER_QUESTION_TWICE", answer
++            )
++
++            # The re-ask MUST surface as a second card with a fresh id —
++            # reusing the round-1 id would make the web render into the
++            # stale (already-resolved) card and the re-submit would 404.
++            self.assertEqual(len(perms), 2,
++                             "re-ask in the same turn must surface as a second "
++                             "session/request_permission")
++            self.assertNotEqual(perms[0]["id"], perms[1]["id"])
++            q1 = perms[0]["params"]["toolCall"]["rawInput"]["questions"]
++            q2 = perms[1]["params"]["toolCall"]["rawInput"]["questions"]
++            self.assertEqual(q1[0]["question"], "Which framework should we use?")
++            self.assertEqual(q2[0]["question"], "Pick a color theme?")
++
++            self.assertIsNotNone(
++                prompt_resp,
++                "prompt never completed — the re-asked question's answer "
++                "likely never reached zcode",
++            )
++            self.assertEqual(prompt_resp["result"]["stopReason"], "end_turn")
++
++            # zcode saw exactly two replies, on distinct rpcIds: round 1
++            # cancel, round 2 accept with the round-2 answer only (no
++            # cross-round leakage).
++            replies = self._read_state_replies()
++            self.assertEqual(len(replies), 2)
++            self.assertNotEqual(replies[0].get("id"), replies[1].get("id"))
++            self.assertEqual(replies[0]["result"]["action"], "cancel")
++            self.assertEqual(replies[1]["result"]["action"], "accept")
++            self.assertEqual(
++                replies[1]["result"]["content"]["answers"],
++                {"Pick a color theme?": "Dark"},
++            )
++        finally:
++            client.close()
++
++    def test_late_reply_to_first_request_does_not_break_second(self) -> None:
++        """A stale re-submit for round 1 must not satisfy/corrupt round 2.
++
++        Web-side, a user whose first submit "did nothing" re-presses
++        submit on the re-displayed card — the duplicate reply for the
++        round-1 request id arrives while the bridge is waiting on round
++        2. The bridge must keep waiting for the round-2 reply and
++        deliver ITS answer, not the stale one.
++        """
++        proc = _spawn_bridge({"FAKE_ZCODE_STATE_FILE": self._state_file.name})
++        client = ACPClient(proc)
++        try:
++            acp_sid = _init_and_new_session(client)
++
++            def answer(msg: dict[str, Any], perms: list[dict[str, Any]]) -> None:
++                if len(perms) == 1:
++                    client.send({
++                        "jsonrpc": "2.0",
++                        "id": msg["id"],
++                        "result": {"outcome": {"outcome": "cancelled"}},
++                    })
++                else:
++                    # Stale duplicate for round 1 (id of perms[0]) sent
++                    # BEFORE the genuine round-2 reply.
++                    client.send({
++                        "jsonrpc": "2.0",
++                        "id": perms[0]["id"],
++                        "result": {"outcome": {"outcome": "selected",
++                                               "optionId": "React"}},
++                    })
++                    client.send({
++                        "jsonrpc": "2.0",
++                        "id": msg["id"],
++                        "result": {"outcome": {"outcome": "selected",
++                                               "optionId": "Dark"}},
++                    })
++
++            perms, prompt_resp = _drive_prompt(
++                client, acp_sid, "ASK_USER_QUESTION_TWICE", answer
++            )
++
++            self.assertEqual(len(perms), 2)
++            self.assertIsNotNone(
++                prompt_resp,
++                "bridge wedged after a stale round-1 reply arrived mid-round-2",
++            )
++            self.assertEqual(prompt_resp["result"]["stopReason"], "end_turn")
++
++            replies = self._read_state_replies()
++            self.assertEqual(len(replies), 2)
++            self.assertEqual(replies[1]["result"]["action"], "accept")
++            self.assertEqual(
++                replies[1]["result"]["content"]["answers"],
++                {"Pick a color theme?": "Dark"},
++                "stale round-1 reply leaked into the round-2 answer",
++            )
++        finally:
++            client.close()
++
++
+ if __name__ == "__main__":
+     unittest.main(verbosity=2)

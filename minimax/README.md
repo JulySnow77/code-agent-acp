@@ -4,6 +4,8 @@
 
 MiniMax Code（npm `@minimax-ai/code`，CLI `mcode`）通过 **`mcode acp` 原生提供 ACP server**。所以本项目**不重复实现模型、工具或权限链路**，而是补齐 Go 侧需要的东西：
 
+当前版本 `00.00.02`：修复 bridge 在建会话、加载／恢复和 prompt 响应前未等待通知转发的问题，保证最终文本与历史重放先于对应响应；阻塞通知 worker 的回归用例覆盖此顺序。该修复不扩大真实 MiniMax 证据边界。
+
 | 形态 | 作用 |
 | :--- | :--- |
 | `doctor` | 只读体检：CLI 版本、原生 ACP 命令、登录数据目录（仅目录名）、桌面沙箱环境干扰 + `initialize` 握手 |

@@ -19,8 +19,8 @@ ACP 宿主 (Zed / JetBrains / auto-run / ...)
 
 | 模块 | CLI | 主要角色 | 独立版本 | 版本定义（唯一事实来源） |
 | :--- | :--- | :--- | :--- | :--- |
-| [kimi/](kimi/) | `kimi-acp` | client / agent / bridge | `00.00.01` | [`kimi/cmd/kimi-acp/main.go`](kimi/cmd/kimi-acp/main.go) `const version` |
-| [minimax/](minimax/) | `minimax-acp` | client / agent / bridge | `00.00.01` | [`minimax/cmd/minimax-acp/main.go`](minimax/cmd/minimax-acp/main.go) `const version` |
+| [kimi/](kimi/) | `kimi-acp` | client / agent / bridge | `00.00.02` | [`kimi/cmd/kimi-acp/main.go`](kimi/cmd/kimi-acp/main.go) `const version` |
+| [minimax/](minimax/) | `minimax-acp` | client / agent / bridge | `00.00.02` | [`minimax/cmd/minimax-acp/main.go`](minimax/cmd/minimax-acp/main.go) `const version` |
 | [workbuddy/](workbuddy/) | `workbuddy-acp-bridge` | ACP stdio server ↔ WorkBuddy 网关 | `00.00.01` | [`workbuddy/internal/protocol/protocol.go`](workbuddy/internal/protocol/protocol.go) `VersionString` |
 | [zcode/](zcode/) | `zcode-acp-bridge` | ACP agent ↔ headless ZCode CLI | `00.00.01` | [`zcode/cmd/zcode-acp-bridge/main.go`](zcode/cmd/zcode-acp-bridge/main.go) `defaultBridgeVersion` |
 

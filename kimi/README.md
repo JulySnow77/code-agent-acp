@@ -2,7 +2,7 @@
 
 用 **Go 1.22+、零第三方依赖**实现的 Kimi Code ACP 工具集：驱动、诊断、代理 **Kimi Code 原生 `kimi acp` stdio server**，并提供一个确定性的 Go ACP agent 作为协议夹具。
 
-**当前版本：`00.00.01`**（`bin/kimi-acp version` 可查；版本策略见[根 README](../README.md)）。
+**当前版本：`00.00.02`**（`bin/kimi-acp version` 可查；版本策略见[根 README](../README.md)）。
 
 Kimi Code CLI（本机实测 2.1.1）通过 **`kimi acp` 原生提供 ACP server**。所以本项目不重复实现模型、工具或权限链路，而是补齐 Go 侧需要的东西：
 
@@ -81,6 +81,8 @@ bin/kimi-acp bridge --trace /tmp/bridge.ndjson
 ```
 
 上游（编辑器）与下游（`kimi acp`）的请求、响应、通知原样转发；stderr 只写诊断，stdout 永远是纯协议流。本配置纯靠旗标，无环境变量。
+
+`00.00.02` 修复流式顺序：建会话、加载／恢复和 prompt 的响应发回宿主前，等待已收到的通知转发完成，保证最终文本与历史重放先于对应响应。新增阻塞通知 worker 的回归用例；只验证代理协议顺序，不代表真实模型链路已验证。
 
 ## 接入编辑器
 

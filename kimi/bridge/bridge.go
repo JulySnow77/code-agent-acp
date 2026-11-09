@@ -111,6 +111,11 @@ func (b *Bridge) forward(ctx context.Context, inID acp.RequestID, to *acp.Conn, 
 	}()
 
 	res, err := to.CallRawWithID(ctx, outID, method, params)
+	if downstream && (method == acp.MethodSessionPrompt || method == acp.MethodSessionNew || method == acp.MethodSessionLoad || method == acp.MethodSessionResume) {
+		if flushErr := to.FlushNotifications(ctx); err == nil {
+			err = flushErr
+		}
+	}
 	if err != nil {
 		var rpcErr *acp.RPCError
 		if errors.As(err, &rpcErr) {

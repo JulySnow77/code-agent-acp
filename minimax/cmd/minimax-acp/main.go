@@ -23,7 +23,7 @@ import (
 	"minimax-acp/internal/minimax"
 )
 
-const version = "00.00.01"
+const version = "00.00.02"
 
 type commonOpts struct {
 	command string

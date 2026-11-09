@@ -129,3 +129,46 @@ func TestBridgeForwardsErrorsUnchanged(t *testing.T) {
 		t.Fatalf("error response was not forwarded: %v", err)
 	}
 }
+
+func TestPromptResponseWaitsForForwardedUpdates(t *testing.T) {
+	client, bridge, cleanup, _, _, _ := newProxiedEcho(t)
+	defer cleanup()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	var session acp.NewSessionResult
+	if err := client.Call(ctx, acp.MethodSessionNew, acp.NewSessionParams{CWD: t.TempDir()}, &session); err != nil {
+		t.Fatal(err)
+	}
+	entered, release := make(chan struct{}), make(chan struct{})
+	var once sync.Once
+	defer once.Do(func() { close(release) })
+	bridge.up.OnDefaultNotification(func(_ context.Context, method string, params json.RawMessage) {
+		select {
+		case <-entered:
+		default:
+			close(entered)
+		}
+		<-release
+		_ = bridge.down.NotifyRaw(method, params)
+	})
+	completed := make(chan error, 1)
+	go func() {
+		completed <- client.Call(ctx, acp.MethodSessionPrompt, acp.PromptParams{
+			SessionID: session.SessionID, Prompt: []acp.ContentBlock{acp.TextBlock("result")},
+		}, nil)
+	}()
+	select {
+	case <-entered:
+	case <-ctx.Done():
+		t.Fatal("no streamed update received")
+	}
+	select {
+	case err := <-completed:
+		t.Fatalf("prompt returned before streamed updates were forwarded: %v", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+	once.Do(func() { close(release) })
+	if err := <-completed; err != nil {
+		t.Fatal(err)
+	}
+}

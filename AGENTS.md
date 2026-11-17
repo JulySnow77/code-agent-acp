@@ -2,19 +2,20 @@
 
 ## Project Structure & Module Organization
 
-Four independent Go modules share one Git repository: `kimi/`, `minimax/`, `workbuddy/`, and `zcode/`. Each has its own `go.mod`, `Makefile`, and CLI entry point under `cmd/`. There is no root Go module or workspace; run Go commands inside the relevant module. Keep modules independently buildable without sibling imports or nested Git repositories.
+Five independent Go modules share one Git repository: `kimi/`, `minimax/`, `workbuddy/`, `zcode/`, and `codex/`. Each has its own `go.mod`, `Makefile`, and CLI entry point under `cmd/`. There is no root Go module or workspace; run Go commands inside the relevant module. Keep modules independently buildable without sibling imports or nested Git repositories.
 
-Kimi and MiniMax organize protocol, client, agent, and proxy code in `acp/`, `client/`, `agent/`, and `bridge/`. WorkBuddy and ZCode primarily use `internal/`. Tests generally sit beside source files; ZCode also has `test/e2e/`, `test/smoke/`, and `testdata/`. Module-local `docs/` and `examples/` hold documentation and integration examples.
+Kimi and MiniMax organize protocol, client, agent, and proxy code in `acp/`, `client/`, `agent/`, and `bridge/`. WorkBuddy, ZCode and Codex primarily use `internal/`; Codex splits it into `internal/protocol` (both JSON-RPC dialects), `internal/codexapp` (app-server child process), and `internal/bridge` (ACP translation). Tests generally sit beside source files; ZCode also has `test/e2e/`, `test/smoke/`, and `testdata/`, while Codex has `test/e2e/` driving the compiled binary with a scripted fake app-server. Module-local `docs/` and `examples/` hold documentation and integration examples.
 
 ## Build, Test, and Development Commands
 
-Kimi, MiniMax, and WorkBuddy declare Go 1.22; ZCode declares Go 1.26.1. Use a compatible toolchain.
+Kimi, MiniMax, WorkBuddy and Codex declare Go 1.22; ZCode declares Go 1.26.1. Use a compatible toolchain.
 
 - `make -C kimi build`: build `kimi/bin/kimi-acp`. Each module supports `make build`.
+- `make -C codex build`: build `codex/bin/codex-acp-bridge` (zero third-party dependencies).
 - `make -C minimax test`: run module tests. Each module supports `make test`; ZCode also runs vet.
 - `(cd workbuddy && go vet ./...)`: perform static checks; use the same command in other modules.
-- `(cd kimi && go test -race ./...)`: check concurrent behavior.
-- `make -C workbuddy doctor`: build and diagnose the local WorkBuddy connection. Other modules also expose `doctor`; consult their implementation before contacting real agents.
+- `(cd kimi && go test -race ./...)`: check concurrent behavior; `make -C codex race` does the same for the adapter.
+- `make -C workbuddy doctor`: build and diagnose the local WorkBuddy connection. Other modules also expose `doctor`; consult their implementation before contacting real agents. `make -C codex doctor` launches a real `codex app-server` and performs the initialize handshake only.
 
 ## Coding Style & Naming Conventions
 

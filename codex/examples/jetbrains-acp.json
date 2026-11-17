@@ -1,0 +1,12 @@
+{
+  "agent_servers": {
+    "Codex (Go ACP adapter)": {
+      "command": "/ABS/PATH/TO/code-agent-acp/codex/bin/codex-acp-bridge",
+      "args": ["serve"],
+      "env": {
+        "CODEX_BIN": "/ABS/PATH/TO/codex",
+        "CODEX_ACP_APPROVAL_POLICY": "on-request"
+      }
+    }
+  }
+}

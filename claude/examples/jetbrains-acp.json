@@ -1,0 +1,12 @@
+{
+  "agent_servers": {
+    "Claude Code (Go ACP adapter)": {
+      "command": "/ABS/PATH/TO/code-agent-acp/claude/bin/claude-acp-bridge",
+      "args": ["serve"],
+      "env": {
+        "CLAUDE_BIN": "/ABS/PATH/TO/claude",
+        "CLAUDE_ACP_PERMISSION_MODE": "manual"
+      }
+    }
+  }
+}

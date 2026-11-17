@@ -117,6 +117,17 @@ func (br *Bridge) handleUserInput(ctx context.Context, acpSID string, req *zcode
 		return time.Since(start)
 	}
 	br.logger("  [ask] %d 个问题待用户回答 (rpcId=%s)", len(questions), req.ID)
+	// T024 诊断（2026-11-12 用户裁决"先打印提问原文"）：打印问题原文与选项标题，
+	// 脱敏截断；不改变任何应答策略（无人工通道仍按原逻辑 cancel）。
+	for _, q := range questions {
+		questionText := zcode.Str(q, "question")
+		if questionText == "" {
+			questionText = zcode.Str(q, "text")
+		}
+		if questionText != "" {
+			br.logger("  [ask-text] %s", truncateForLog(questionText, 400))
+		}
+	}
 
 	// T003: flow-questions v1 优先于 elicitation —— daemon 声明了 flowQuestions
 	// 就不再发 elicitation/create, 改发 _multica/flow/question 并停泊原生调用。
@@ -359,4 +370,12 @@ func filterQuestionDicts(raw any) []map[string]any {
 		}
 	}
 	return out
+}
+
+// truncateForLog 截断日志文本（防敏感/超长）。
+func truncateForLog(text string, max int) string {
+	if len(text) <= max {
+		return text
+	}
+	return text[:max] + "…"
 }

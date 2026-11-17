@@ -1,6 +1,9 @@
 package bridge
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
+	"path/filepath"
 	"context"
 	"encoding/json"
 	"errors"
@@ -746,6 +749,22 @@ func (br *Bridge) pushAccountProviderConfig() bool {
 	if payload == nil {
 		return false
 	}
+	// T024 (2026-11-12): 指纹必须对 CLI 实际加载的那份内置表路径计算。
+	// 启动方用 ZCODE_BUILTIN_PROVIDER_CONFIG_FILE 显式指定时, CLI 读的就是它;
+	// 而 BuiltinProviderPath() 的 runtime 拷贝优先会让哈希路径与后端不一致,
+	// 后端于是「接受推送但静默丢弃 entitlement」(目录里始终 0 个 account: 模型)。
+	if envPath := strings.TrimSpace(os.Getenv("ZCODE_BUILTIN_PROVIDER_CONFIG_FILE")); envPath != "" {
+		if _, err := os.Stat(envPath); err == nil {
+			if abs, aerr := filepath.Abs(envPath); aerr == nil {
+				parts := strings.SplitN(payload.BasedOnZCodeBuiltinRevisio, ":", 3)
+				if len(parts) == 3 {
+					sum := sha256.Sum256([]byte(abs))
+					payload.BasedOnZCodeBuiltinRevisio = parts[0] + ":" + parts[1] + ":" + hex.EncodeToString(sum[:])
+					br.logger("account-provider: 指纹改按 CLI 实际加载路径计算 (%s)", abs)
+				}
+			}
+		}
+	}
 	resp, err := br.request(zcode.AccountProviderConfigMethod, map[string]any{
 		"revision":                    payload.Revision,
 		"basedOnZCodeBuiltinRevision": payload.BasedOnZCodeBuiltinRevisio,
@@ -781,6 +800,20 @@ func (br *Bridge) pushAccountProviderConfig() bool {
 		} else {
 			br.logger("account-provider: 已推送 %d 个 provider", n)
 		}
+	}
+	// T024 (2026-11-12): 0.17.1 观测 —— 快照推送 status=received 后模型目录
+	// 仍为 0, session/setModel 报 "Provider Registry 中不存在 Model"。方法表
+	// 里紧邻 updateAccountConfig 有 provider/refreshRegistry, 疑似新版要求
+	// 显式刷新才物化。尽力而为: 旧版不认识就 -32601 静默跳过。
+	if _, err := br.request("provider/refreshRegistry", map[string]any{"reason": "account-config-updated"}); err != nil {
+		var rpcErr *zcode.RPCError
+		if errors.As(err, &rpcErr) && rpcErr.Code == -32601 {
+			br.logger("account-provider: 后端不支持 provider/refreshRegistry —— 已跳过")
+		} else {
+			br.logger("account-provider: refreshRegistry 失败（忽略）: %v", rpcMessage(err))
+		}
+	} else {
+		br.logger("account-provider: refreshRegistry 完成")
 	}
 	return n > 0
 }

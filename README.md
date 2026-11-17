@@ -1,6 +1,6 @@
 # code-agent-acp
 
-一个 Git 仓库，五个独立 Go 模块，把五个编码 agent 分别接入 **ACP（Agent Client Protocol）v1**：`kimi`、`minimax`、`workbuddy`、`zcode`、`codex`。
+一个 Git 仓库，六个独立 Go 模块，把六个编码 agent 分别接入 **ACP（Agent Client Protocol）v1**：`kimi`、`minimax`、`workbuddy`、`zcode`、`codex`、`claude`。
 
 每个模块有自己的 `go.mod`、`Makefile` 和 `cmd/` CLI 入口，**独立构建、独立测试、互不 import、不共享代码**；没有根 Go module。仓库级约定见 [AGENTS.md](AGENTS.md)。
 
@@ -24,19 +24,20 @@ ACP 宿主 (Zed / JetBrains / auto-run / ...)
 | [workbuddy/](workbuddy/) | `workbuddy-acp-bridge` | ACP stdio server ↔ WorkBuddy 网关 | `00.00.01` | [`workbuddy/internal/protocol/protocol.go`](workbuddy/internal/protocol/protocol.go) `VersionString` |
 | [zcode/](zcode/) | `zcode-acp-bridge` | ACP agent ↔ headless ZCode CLI | `00.00.01` | [`zcode/cmd/zcode-acp-bridge/main.go`](zcode/cmd/zcode-acp-bridge/main.go) `defaultBridgeVersion` |
 | [codex/](codex/) | `codex-acp-bridge` | ACP agent ↔ Codex `app-server` 适配器 | `00.00.01` | [`codex/internal/protocol/frame.go`](codex/internal/protocol/frame.go) `VersionString` |
+| [claude/](claude/) | `claude-acp-bridge` | ACP agent ↔ Claude Code `stream-json` 适配器 | `00.00.01` | [`claude/internal/protocol/frame.go`](claude/internal/protocol/frame.go) `VersionString` |
 
 版本号随时可以用 `<cli> version` 查询，例如 `kimi-acp version` 输出 `kimi-acp 00.00.01`。
 
 ### 版本策略
 
 - **格式**：`MM.mm.pp` 三段两位补零（如 `00.00.01`），与语义化版本对应——首位给不兼容的协议/CLI 契约变更，中位给新功能，末位给修复。
-- **独立递增**：四个模块的版本号互不联动，只改了哪个模块就只升哪个；跨模块协同变更时各自同时升一版。
+- **独立递增**：六个模块的版本号互不联动，只改了哪个模块就只升哪个；跨模块协同变更时各自同时升一版。
 - **项目版本**：根目录 `VERSION` 记录仓库整体版本，与模块版本独立维护。
 - **发布覆盖**：`zcode-acp-bridge` 发布构建会用 ldflags 注入版本（见 `zcode/.goreleaser.yaml`），未注入时报告 `defaultBridgeVersion`；其余模块以代码常量为准。
 
 ## 构建与测试
 
-各模块需在模块目录内执行（无根 module）。Kimi / MiniMax / WorkBuddy / Codex 声明 Go 1.22，ZCode 声明 Go 1.26.1。
+各模块需在模块目录内执行（无根 module）。Kimi / MiniMax / WorkBuddy / Codex / Claude 声明 Go 1.22，ZCode 声明 Go 1.26.1。
 
 | 模块 | 构建 | 测试 | 静态检查 |
 | :--- | :--- | :--- | :--- |
@@ -45,10 +46,11 @@ ACP 宿主 (Zed / JetBrains / auto-run / ...)
 | workbuddy | `make -C workbuddy build` → `workbuddy/bin/workbuddy-acp-bridge`（另产 `bin/fake-acp-server` 夹具） | `make -C workbuddy test` | `make -C workbuddy vet` |
 | zcode | `make -C zcode build` → `zcode/zcode-acp-bridge` | `make -C zcode test`（vet + 全量） | 含于 test |
 | codex | `make -C codex build` → `codex/bin/codex-acp-bridge` | `make -C codex test`（含真实子进程 e2e） | `make -C codex vet` |
+| claude | `make -C claude build` → `claude/bin/claude-acp-bridge` | `make -C claude test`（含 fake 子进程 e2e） | `make -C claude vet` |
 
 补充：
 
-- 各模块都有只读 `doctor` 目标（`make -C <module> doctor`），只做握手、不发 prompt；使用前先读各模块实现说明。Codex 的 `doctor` 会真实启动 `codex app-server` 并做 `initialize` / `initialized` 握手，输出 JSON。
+- 各模块都有只读 `doctor` 目标（`make -C <module> doctor`），只做握手、不发 prompt；使用前先读各模块实现说明。Codex 的 `doctor` 会真实启动 `codex app-server` 并做 `initialize` / `initialized` 握手，输出 JSON；Claude 的 `doctor` 校验 `claude --version` 与 stream-json argv（不调用模型）。
 - ZCode 真机测试需 `-tags=real` 与本地 `env` 配置（模板 [zcode/env.example](zcode/env.example)），任务类测试会真实读写文件，请用隔离工作区；部分 fake-backend 测试依赖 Python 3。
 - 编译产物（`bin/`、`dist/`）不入 Git；ACP stdout 永远只走协议帧，诊断一律走 stderr。
 
@@ -61,3 +63,4 @@ ACP 宿主 (Zed / JetBrains / auto-run / ...)
 | **workbuddy** | 把 WorkBuddy PC 客户端本机 ACP 网关（HTTP/SSE）桥接为标准 ACP v1 stdio server | [workbuddy/README.md](workbuddy/README.md) |
 | **zcode** | 把 headless ZCode CLI 桥接为 ACP agent 的单二进制，移植自 Python 版并保持语义等价 | [zcode/README.md](zcode/README.md) |
 | **codex** | Codex 无原生 ACP；以 Go 适配器启动 `codex app-server` 并把 thread/turn/item 事件翻译为 ACP v1 | [codex/README.md](codex/README.md) |
+| **claude** | Claude Code 无原生 ACP；以 Go 适配器按会话启动 `claude -p` stream-json 进程，把 assistant/result/control 事件翻译为 ACP v1 | [claude/README.md](claude/README.md) |
